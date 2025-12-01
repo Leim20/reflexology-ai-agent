@@ -1,0 +1,863 @@
+# ============================================================================
+# SERENITY REFLEXOLOGY (EXAMPLE CITY BRANCH) - COMPREHENSIVE KNOWLEDGE BASE
+# ============================================================================
+# This file contains all business information for Serenity Reflexology Example City
+# branch. Agent uses this to answer customer questions accurately.
+# ============================================================================
+
+CATALOG: 
+BUSINESS_INFO: 
+Business Name: Serenity Reflexology (Example City Branch / Downtown)
+Phone Number: 03-1234 5678
+WhatsApp: Available for bookings
+Google Maps: https://g.co/kgs/czy8U83
+Operating Hours: Daily 10:00 AM - 12:00 AM (Midnight)
+Last Call Session: 11:30 PM
+Open Every Day: Yes, we are open daily including weekends
+Facebook Page: Serenity Reflexology (customers must like for membership)
+
+Branch Locations:
+- Downtown (Main branch for this agent)
+- Multiple branches available (refer customers to specific branch contact)
+
+# ============================================================================
+
+SERVICES_PRICING: 
+
+# ============================================================================
+# 📋 SERVICES & PRICING - VERSIONED MENU SYSTEM
+# ============================================================================
+# IMPORTANT: This file contains the current pricing version
+# ALWAYS USE: October 2025 Menu (listed below)
+# ============================================================================
+
+## VERSION CONTROL
+Current Active Version: OCTOBER 2025 MENU (Active from Oct 29, 2025)
+Last Updated: November 25, 2025
+
+---
+
+# ============================================================================
+# ⭐ OCTOBER 2025 MENU (ACTIVE - Use for All Customer Inquiries)
+# ============================================================================
+
+## RECOMMENDED PACKAGES - BEST VALUE & MOST POPULAR ⭐
+
+### FOOT MASSAGE - Complete (90 mins) ⭐ RECOMMENDED
+Duration: 90 minutes (Foot 60 mins + Back 30 mins)
+Technique: Acupressure - deep pressure on foot reflex zones
+Package Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+Pricing (October 2025):
+  - Non-Member: RM189
+  - Member: RM139
+  - Member Discount: 26% off
+
+### AROMATHERAPY/BODY - Essential (90 mins) ⭐ RECOMMENDED
+Duration: 90 minutes
+Technique: Full body aromatherapy massage with essential oils
+Package Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+Add-On Services Included: FREE choice of Cupping, Ear Candling, Belly Candling, or Gua Sha (pick 1 only)
+Pricing (October 2025):
+  - Non-Member: RM209
+  - Member: RM169
+  - Member Discount: 19% off
+
+### AROMATHERAPY/BODY - Complete (120 mins) ⭐ RECOMMENDED
+Duration: 120 minutes (2 hours)
+Technique: Full body aromatherapy massage with essential oils
+Package Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+Add-On Services Included: FREE choice of Cupping, Ear Candling, Belly Candling, or Gua Sha (pick 1 only)
+Pricing (October 2025):
+  - Non-Member: RM278
+  - Member: RM199
+  - Member Discount: 28% off
+
+---
+
+## OTHER PACKAGES - BUDGET-FRIENDLY OPTIONS
+
+### FOOT MASSAGE - Basic (60 mins)
+Duration: 60 minutes (Foot 45 mins + Back 15 mins)
+Technique: Acupressure
+Package Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+Pricing (October 2025):
+  - Non-Member: RM129
+  - Member: RM99
+  - Member Discount: 23% off
+
+### FOOT MASSAGE - Essential (70 mins)
+Duration: 70 minutes (Foot 60 mins + Back 10 mins)
+Technique: Acupressure
+Package Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+Pricing (October 2025):
+  - Non-Member: RM149
+  - Member: RM109
+  - Member Discount: 27% off
+
+### AROMATHERAPY/BODY - Basic (60 mins)
+Duration: 60 minutes
+Technique: Full body aromatherapy massage with essential oils
+Package Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+Pricing (October 2025):
+  - Non-Member: RM149
+  - Member: RM109
+  - Member Discount: 27% off
+
+---
+
+## ADD-ON TREATMENTS (October 2025)
+
+### Individual Add-On Services (30 mins each)
+Services Available: Hot Stone, Guasha, Ear Candling, Cupping, Belly Candling
+Pricing (October 2025):
+  - Price per service: RM75
+  - Can be purchased as standalone treatment
+  - Multiple add-ons can be combined in one session
+
+### Add-On Service Details
+
+Cupping:
+- Helps with muscle tension and pain relief
+- Can do once a month depending on body condition
+- Slightly uncomfortable but therapeutic
+
+Guasha:
+- A little bit painful for first-timers
+- Good for releasing toxins and improving circulation
+- Leaves temporary red marks
+
+Ear Candling:
+- Gentle massage technique
+- Relaxing therapy
+
+Belly Candling:
+- Massage therapy for digestive issues
+- Helps with bloating and gas
+- Comfortable and relaxing
+
+Hot Stone:
+- Can be added to body massage sessions
+- Provides warmth and deeper relaxation
+
+---
+
+# ============================================================================
+# ⭐ 2025年10月菜单 (中文版 - CHINESE VERSION)
+# ============================================================================
+
+## 推荐配套 - 最超值和最受欢迎 ⭐
+
+### 足部按摩 - 完整护理 (90分钟) ⭐ 推荐
+时长：90分钟（足部60分钟 + 背部30分钟）
+手法：指压 - 足部反射区深层按压
+疗程包含：海盐、足部磨砂、热眼罩、热敷包
+价格（2025年10月）：
+  - 非会员：RM189
+  - 会员：RM139
+  - 会员折扣：26%
+
+### 香薰疗法 - 基础护理 (90分钟) ⭐ 推荐
+时长：90分钟
+手法：推拿 - 全身香薰精油按摩
+疗程包含：热石、热眼罩、足部磨砂、海盐、热敷包
+附加理疗（任选其一）：拔罐 / 耳烛 / 脐烛 / 刮痧
+价格（2025年10月）：
+  - 非会员：RM209
+  - 会员：RM169
+  - 会员折扣：19%
+
+### 香薰疗法 - 完整护理 (120分钟) ⭐ 推荐
+时长：120分钟（2小时）
+手法：推拿 - 全身香薰精油按摩
+疗程包含：热石、热眼罩、足部磨砂、海盐、热敷包
+附加理疗（任选其一）：拔罐 / 耳烛 / 脐烛 / 刮痧
+价格（2025年10月）：
+  - 非会员：RM278
+  - 会员：RM199
+  - 会员折扣：28%
+
+---
+
+## 其他配套 - 经济实惠选择
+
+### 足部按摩 - 基础护理 (60分钟)
+时长：60分钟（足部45分钟 + 背部15分钟）
+手法：指压
+疗程包含：海盐、足部磨砂、热眼罩、热敷包
+价格（2025年10月）：
+  - 非会员：RM129
+  - 会员：RM99
+  - 会员折扣：23%
+
+### 足部按摩 - 进阶护理 (70分钟)
+时长：70分钟（足部60分钟 + 背部10分钟）
+手法：指压
+疗程包含：海盐、足部磨砂、热眼罩、热敷包
+价格（2025年10月）：
+  - 非会员：RM149
+  - 会员：RM109
+  - 会员折扣：27%
+
+### 香薰疗法 - 基础护理 (60分钟)
+时长：60分钟
+手法：推拿 - 全身香薰精油按摩
+疗程包含：热石、热眼罩、足部磨砂、海盐、热敷包
+价格（2025年10月）：
+  - 非会员：RM149
+  - 会员：RM109
+  - 会员折扣：27%
+
+---
+
+## 附加理疗项目（2025年10月）
+
+### 个别附加理疗服务（每项30分钟）
+服务项目：热石 / 刮痧 / 耳烛 / 拔罐 / 脐烛
+价格（2025年10月）：
+  - 每项服务：RM75
+  - 可单独购买
+  - 可在一次疗程中结合多项附加服务
+
+### 附加服务详情
+
+拔罐：
+- 帮助缓解肌肉紧张和疼痛
+- 根据身体状况，可每月进行一次
+- 略有不适但具有疗效
+
+刮痧：
+- 初次体验者可能会感到有点疼痛
+- 有助于排毒和改善血液循环
+- 会留下暂时性红印
+
+耳烛：
+- 温和的按摩手法
+- 放松疗法
+
+脐烛：
+- 针对消化问题的按摩疗法
+- 帮助缓解腹胀和胀气
+- 舒适放松
+
+热石：
+- 可添加到身体按摩疗程中
+- 提供温暖和更深层的放松效果
+
+---
+
+THERAPIST_SERVICES: 
+
+## Therapist Selection
+- Customers can request specific therapists by number
+- Available therapists: Numbers 45, 46, 55, 58, 61, 64, and others
+- Can request male or female therapists
+- Can request experienced therapists (会按的 / 有经验的)
+- Some therapists rest on certain days
+- Indonesian therapists available
+- We track customer preferences and therapist notes
+- If customer didn't like a therapist, we record and won't assign again
+
+## Therapist Availability
+- Therapists have numbers for identification
+- Different branches have different therapist numbers
+- Example City branch does not have all numbers (e.g., no Number 19)
+- Customers can book their preferred therapist in advance
+- If preferred therapist unavailable, we suggest alternatives
+
+## Gender Preferences
+- Can arrange male or female therapists
+- Most customers prefer female therapists
+- We always confirm gender preference when booking
+
+# ============================================================================
+
+MEMBERSHIP_BENEFITS: 
+
+## Summary of Member Benefits (成为SERENITY会员可享有以下福利)
+
+1. **专属会员价格，长期节省消费成本** (Exclusive Member Pricing - Long-term Savings)
+   - Save 19-28% on all packages
+   - Member prices: RM99-RM199 (vs Non-member: RM129-RM278)
+
+2. **生日月份可享受** (Birthday Month Benefits - ONE TIME ONLY):
+   - 一小时免费按摩 (FREE 1 hour massage) - Must purchase once before claiming
+   - 携带亲友同行还可享 20%折扣 (Friends get 20% discount when accompanying birthday member)
+   - ⚠️ Both benefits valid ONE TIME ONLY per year
+
+3. **积分累积制度** (Points Accumulation System - Starting November 2025):
+   - Earn points on every purchase
+   - 积分可兑换免费按摩服务 (Redeem points for FREE massage services)
+
+4. **充值配套额外赠送** (Top-Up Package Bonus):
+   - 购买充值配套可获得额外赠送的信用额 (Get BONUS credit when buying top-up packages)
+   - 同时每次消费也可继续累积积分 (Continue earning points on every purchase)
+
+---
+
+## Free Membership Registration
+Registration Requirements:
+1. Provide your information:
+   - Name (名字)
+   - Phone Number (电话号码)
+   - Birthday Date (生日日期)
+2. Like our Serenity Reflexology Facebook Page
+3. Send screenshot as confirmation
+4. Registration is FREE
+
+## Birthday Month Benefits
+
+⚠️ IMPORTANT: Birthday benefits are ONE-TIME ONLY per year, not valid for entire month
+
+### Birthday Member Gets:
+- FREE 1 hour massage service
+- Valid during birthday month only
+- Can only claim ONE TIME per year (not multiple visits)
+- Must have purchased service ONCE before claiming
+- Example: Register → Buy service once → Next visit can claim free 1 hour
+
+### Friends Discount (20% Off):
+- Friends who accompany birthday member get 20% discount
+- Only valid ONE TIME during birthday month (same visit as free massage claim)
+- Birthday member MUST come WITH friends to activate this discount
+- If birthday member comes alone, no 20% discount applies
+- Friends discount applies to all accompanying friends on that ONE visit only
+
+⚠️ Critical Rules:
+1. Both benefits (free 1 hour + friends 20% off) = ONE TIME USE ONLY per year
+2. Friends 20% discount ONLY works when birthday member brings friends
+3. Birthday member coming alone = only gets free 1 hour, no 20% discount available
+4. After claiming once, benefits are used up for the year
+
+Example Scenarios:
+- ✓ Correct: Member purchases once → Comes back with 3 friends during birthday month → Member gets FREE 1 hour + All 3 friends get 20% off (ONE TIME)
+- ✓ Correct: Member purchases once → Comes alone during birthday month → Gets FREE 1 hour only (no 20% discount since no friends)
+- ✗ Wrong: Member cannot claim free massage multiple times in birthday month
+- ✗ Wrong: Friends 20% discount does NOT apply if member comes alone
+
+## Member-Only Promotions
+
+### Happy Hour Promotion (Example City Branch Only)
+When: Every Tuesday to Thursday, 7:00 PM - 10:00 PM
+Service: 120-minute Aromatherapy Body Massage (推拿)
+Regular Price: RM 278 (non-member) / RM 199 (member)
+Member Happy Hour Price: SAME as regular member price (RM 199)
+NOTE: October 2025 pricing - See [SERVICES_PRICING] section for current rates
+Requirements:
+- SERENITY Members only
+- Advance booking required (limited slots)
+- SERENITY Top Up Points CANNOT be used for this promotion
+Terms: Members can book during happy hour times for regular member pricing
+
+## SERENITY Points & Rewards System (Updated November 2025)
+
+### Points Accumulation System (NEW - Starting November 2025)
+- **积分累积制度**: Members earn points on every purchase
+- Points can be redeemed for FREE massage services
+- Accumulate points over time for rewards
+- Check points balance on receipt
+
+### Top-Up Package Benefits
+- Purchase top-up packages and receive BONUS credit (额外信用额 Credit)
+- Example: Top up RM1000 → Get extra RM150 credit (Example City Branch exclusive)
+- Continue earning points on every purchase made with top-up credit
+- Top-up points and credits can be used for regular services
+- Top-up points CANNOT be used for special promotions (like Happy Hour)
+
+### How Points Work
+1. Buy services → Earn points automatically
+2. Accumulate points → Redeem for free massage services
+3. Buy top-up packages → Get bonus credit + continue earning points
+4. Check your points and credit balance on receipt
+
+## Ongoing Promotions
+- Regular promotions available
+- Member-exclusive deals announced regularly
+- Seasonal promotions available
+- Contact us for current offers and pricing
+
+# ============================================================================
+# 📝 PRE-WRITTEN MESSAGE TEMPLATES (HARDCODED - SEND AS-IS)
+# ============================================================================
+# IMPORTANT: These are exact message templates to send to customers
+# When customers ask about these topics, send these messages EXACTLY as written
+# Do NOT paraphrase or modify these templates
+# ============================================================================
+
+## MEMBERSHIP BENEFITS MESSAGE (Chinese)
+**Trigger**: When customer asks about membership, member benefits, registration, or 会员
+**Action**: Send this EXACT message (copy word-for-word):
+
+我们提供*会员价*与*非会员价*两种价格，而*成为我们的会员是完全免费的*，只需提供以下资料即可注册：
+• 姓名
+• 电话号码
+• 出生日期
+
+成为SERENITY会员可享有以下福利：
+1. 享有专属会员价格，长期节省消费成本。
+2. 生日月份可享受：
+   - 一小时免费按摩 （必须在我们店里消费了一次后才可以领取生日免费按摩）
+   - 携带亲友同行还可享 20%折扣 （同行者优惠）。
+3. 自2025年11月起推出*积分累积制度*，积分可兑换免费按摩服务。
+4. 购买我们的充值配套可获得额外赠送的*信用额（Credit）*，同时每次消费也可继续累积积分。
+
+---
+
+# ============================================================================
+# 会员福利详细逻辑 (FOR AI UNDERSTANDING ONLY - DO NOT SEND TO CUSTOMERS)
+# ============================================================================
+# This section is for AI to understand the business logic
+# Use the PRE-WRITTEN MESSAGE above when talking to customers
+# ============================================================================
+
+## 会员福利总结
+
+我们提供*会员价*与*非会员价*两种价格，而*成为我们的会员是完全免费的*，只需提供以下资料即可注册：
+- 姓名
+- 电话号码
+- 出生日期
+
+### 成为SERENITY会员可享有以下福利：
+
+**1. 享有专属会员价格，长期节省消费成本**
+- 所有配套享有 19-28% 折扣
+- 会员价格：RM99-RM199（非会员价格：RM129-RM278）
+
+**2. 生日月份可享受：**
+- **一小时免费按摩**（必须在我们店里消费了一次后才可以领取生日免费按摩）
+- **携带亲友同行还可享 20%折扣**（同行者优惠）
+
+⚠️ **重要说明**：生日福利每年仅限使用一次，不是整个月都可以使用
+
+**生日会员可获得：**
+- 免费1小时按摩服务
+- 仅在生日月份有效
+- 每年只能领取一次（不能多次访问）
+- 必须先购买服务一次才能领取
+- 例如：注册 → 购买服务一次 → 下次访问可领取免费1小时
+
+**亲友折扣（20% 优惠）：**
+- 陪同生日会员的亲友可享 20% 折扣
+- 仅在生日月份有效一次（与免费按摩同一次访问）
+- 生日会员必须携带亲友才能激活此折扣
+- 如果生日会员独自前来，则没有 20% 折扣
+- 亲友折扣适用于该次访问的所有陪同亲友
+
+⚠️ **关键规则：**
+1. 两项福利（免费1小时 + 亲友20%折扣）= 每年仅限使用一次
+2. 亲友 20% 折扣仅在生日会员携带亲友时有效
+3. 生日会员独自前来 = 只能获得免费1小时，无20%折扣
+4. 领取一次后，该年度福利已用完
+
+**示例场景：**
+- ✓ 正确：会员购买一次 → 生日月份携带3位亲友回访 → 会员获得免费1小时 + 所有3位亲友享20%折扣（一次性）
+- ✓ 正确：会员购买一次 → 生日月份独自前来 → 仅获得免费1小时（无亲友所以无20%折扣）
+- ✗ 错误：会员不能在生日月份多次领取免费按摩
+- ✗ 错误：会员独自前来时没有20%折扣
+
+**3. 自2025年11月起推出*积分累积制度*，积分可兑换免费按摩服务**
+- 每次购买自动累积积分
+- 积分可兑换免费按摩服务
+- 长期累积获得奖励
+- 在收据上查看积分余额
+
+**4. 购买我们的充值配套可获得额外赠送的*信用额（Credit）*，同时每次消费也可继续累积积分**
+- 购买充值配套即可获得额外信用额
+- 例如：充值 RM1000 → 获得额外 RM150 信用额（示例城分店专属）
+- 使用充值信用额消费时继续累积积分
+- 充值积分和信用额可用于常规服务
+- 充值积分不能用于特别促销（如欢乐时光）
+
+### 积分系统运作方式
+1. 购买服务 → 自动累积积分
+2. 累积积分 → 兑换免费按摩服务
+3. 购买充值配套 → 获得额外信用额 + 继续累积积分
+4. 在收据上查看您的积分和信用额余额
+
+### 免费会员注册
+注册要求：
+1. 提供您的资料：
+   - 姓名
+   - 电话号码
+   - 出生日期
+2. 点赞我们的 Serenity Reflexology Facebook 专页
+3. 发送截图作为确认
+4. 注册完全免费
+
+### 持续促销活动
+- 定期提供促销活动
+- 会员专属优惠定期公布
+- 季节性促销活动
+- 联系我们了解当前优惠和价格
+
+# ============================================================================
+
+BOOKING_PROCEDURES: 
+
+## How to Make Booking
+1. Contact via WhatsApp or call 03-1234 5678
+2. Specify:
+   - Date and time
+   - Number of people (pax)
+   - Service type (foot/body/duration)
+   - Therapist gender preference (male/female)
+   - Specific therapist number if preferred
+3. We confirm booking immediately
+4. Receive confirmation: "Done for reservation" or "Already booked for you"
+
+## Booking Flexibility
+- Same-day bookings accepted (subject to availability)
+- Can book weeks in advance
+- Walk-ins accepted but booking recommended
+- Can decide service type upon arrival if preferred
+- Multiple people bookings welcome (we have couple rooms)
+
+## Couple Rooms
+- Available for 2 people
+- Can book couple room for privacy
+- Same pricing as regular rooms
+- Request when booking
+
+## Changing/Canceling Appointments
+- Very flexible with time changes
+- Late arrivals accommodated (inform us in advance)
+- Cancellations accepted with understanding ("Ok no problem")
+- Can cancel on same day without penalty
+- Can reschedule anytime
+
+## Appointment Reminders
+- We send reminders on appointment day
+- Confirm if you're running late - we'll wait
+- If coming early, let us know - we can arrange earlier slot
+
+# ============================================================================
+
+COMMON_CUSTOMER_QUESTIONS: 
+
+Q: Now still have promo?
+A: Yes! Our current packages (October 2025): Foot 60+back 30min 90mins RM189/139, Aromatherapy 90min RM209/169 (includes free cupping/guasha/ear candling/belly candling), Aromatherapy 120min RM278/199. All members get 19-28% discount! 😊
+
+Q: Business hour until?
+A: We're open daily from 10am to 12am (midnight). Our last call session is at 11:30pm.
+
+Q: Need appointment?
+A: Making appointment is better so we can arrange early for you. But walk-ins are also welcome subject to availability.
+
+Q: What time open tomorrow?
+A: We are open daily from 10am to 12am.
+
+Q: How much for foot massage? / Full body massage price?
+A: Foot massage: 60min RM129/99, 70min RM149/109, 90min RM189/139 (recommended). Body massage: 60min RM149/109, 90min RM209/169 (includes free add-ons), 120min RM278/199. Prices shown as non-member/member. What duration you prefer?
+
+Q: What's your best package?
+A: Our most popular are the recommended packages: Foot 90min RM189/139 or Aromatherapy 90min RM209/169. The 90min body massage includes free choice of cupping, ear candling, belly candling, or gua sha. Very good value! Want to book?
+
+Q: What are the add-on treatments?
+A: Add-on services: Hot Stone, Guasha (刮痧), Ear Candling, Cupping (拔罐), Belly Candling. Individual add-ons RM75 each, or FREE with 90min/120min body massage packages. Can pick multiple add-ons in one session.
+
+Q: Body massage include foot massage and back massage?
+A: Body massage (推拿) focuses more on body parts with aroma oil. If you take 90min or 120min, we have more time to massage part of the foot as well. If you want more focus on foot reflex zones, I suggest taking foot massage (指压) instead.
+
+Q: What's the difference between foot + back and body massage?
+A: Foot massage (指压, 90min RM189/139) focuses on foot reflex zones with deep acupressure, no aroma oil. Body massage (推拿, 90min RM209/169) is full body with aroma oil and includes free add-ons like cupping or ear candling. Different techniques and focus areas. Which one interested you?
+
+Q: Member pricing how much discount?
+A: Members get great discounts on all packages! Example: Foot 90min RM189→139 (26% off), Aromatherapy 90min RM209→169 (19% off), Aromatherapy 120min RM278→199 (28% off). Registration is FREE! Want to sign up?
+
+Q: Birthday month have promo?
+A: Yes! Member benefit: During your birthday month, you can redeem 1 hour FREE service on any day. All friends who come with you also get 20% discount. Very shiok lor! 😊
+
+Q: Can claim birthday free on same day when register?
+A: The birthday person must purchase service 1 time under their member account first. After purchasing once, can redeem the birthday free session next time. So easy!
+
+Q: Can request specific therapist?
+A: Yes, you can request by therapist number. We'll check if they're available and arrange for you.
+
+Q: Can arrange male/female therapist?
+A: Yes, sure. We can arrange according to your preference. Just let us know when booking.
+
+Q: Cupping/Guasha painful or not?
+A: Guasha is a little bit painful, especially if first time. Cupping might be slightly uncomfortable but therapeutic. Ear candling and belly candling are massage techniques and not painful. We can explain more clearly at the counter when you arrive.
+
+Q: How often can do cupping?
+A: For cupping therapy, can be done once a month, but it also depends on your body condition.
+
+Q: Got slot today/tonight/later?
+A: *Check availability* Yes, we have free slot. What time do you prefer?
+
+Q: Latest menu and price?
+A: Our latest prices (October 2025): Foot 60+back 30 (90min) RM189/139, Aromatherapy 90min RM209/169 (FREE add-ons), Aromatherapy 120min RM278/199. Also got budget options: Foot 60min RM129/99, Foot 70min RM149/109, Body 60min RM149/109. Prices are non-member/member. Which one interested?
+
+Q: Any promo for member?
+A: Member promotions: 19-28% discount on all packages, birthday month FREE 1 hour + friends get 20% off. Plus can accumulate points on purchases. Very worth it! Want to register?
+
+Q: Can come early/late?
+A: Sure, no problem! Just let us know and we'll arrange for you.
+
+Q: Need to cancel appointment
+A: Ok no problem! Thank you for informing us. Feel free to book again next time.
+
+Q: Latest menu and price?
+A: Our latest prices: Foot massage 45min RM69, Foot+back 45+15min RM89, Body massage 90min RM159 (includes free cupping/guasha/ear candling/belly candling), Body 120min RM258. Members get special Happy Hour pricing Tue-Thu 7-10pm.
+
+Q: Any promo for member?
+A: Member promotions: Birthday month get FREE 1 hour massage + friends get 20% off. Happy Hour (Tue-Thu 7-10pm): 120min body massage RM159 instead of RM258. Registration is free!
+
+# ============================================================================
+
+CUSTOMER_SERVICE_STANDARDS: 
+
+## Communication Style
+Greetings:
+- "Thank you for contacting Serenity Reflexology! Please let us know how we can help you😁"
+- "Hi boss / Hi miss / Hi 老板 / Hi 老板娘"
+- "Good morning/evening"
+
+Confirmations:
+- "Alright, see u later😊"
+- "Done for reservation"
+- "Already booked for you"
+- "Ok, waiting for you"
+- "See you😊"
+
+Responses:
+- "Sure can / Can / Got / Okay"
+- "No problem / 没问题"
+- "可以 / 好的"
+- Use bilingual responses naturally (mix English & Chinese)
+
+Closings:
+- "See u later😊"
+- "Thank you for support / Thx for ur support"
+- "Have a good day😊"
+- "等下见 / See you"
+
+## Follow-Up Service
+After Service:
+- Ask about massage experience: "How about the massage experience just now?"
+- Send receipt PDF after service
+- Request Google reviews from satisfied customers
+- Thank customers for support and referrals
+
+Building Relationships:
+- Remember customer preferences (therapist numbers, service types)
+- Track and record which therapists customers liked/didn't like
+- Call customers "boss" (老板) to show respect
+- Very accommodating and patient
+- Apologize if late in replying
+
+## Professional Practices
+- Send digital receipt PDF after each session
+- Record customer service details
+- Track therapist assignments
+- Note customer preferences for future visits
+- Flexible with schedule changes
+- Patient with questions
+- Explain services clearly in customer's language
+
+## Language Support
+- Bilingual: English & Chinese (Mandarin)
+- Naturally mix both languages in conversation
+- Match customer's language preference
+- Use both languages in single response when appropriate
+- Examples: "可以 sure / Got啊 / 没问题 no problem"
+
+# ============================================================================
+
+SERVICE_QUALITY_STANDARDS: 
+
+## What Customers Say
+- "Services really did good"
+- "Professional massage & price reasonable"
+- "Very good 👍"
+- Customers request same therapists repeatedly
+- Customers recommend friends to visit
+- Return customers booking regularly
+
+## Therapist Quality
+- Experienced therapists (有经验的 / 会按的)
+- Skilled in both 指压 (acupressure) and 推拿 (aromatherapy massage)
+- Professional and trained
+- Can perform specialized techniques (cupping, guasha, etc.)
+- Indonesian therapists
+- Male and female options available
+
+## Service Features
+- Clean and comfortable facilities
+- Couple rooms available
+- Private and relaxing environment
+- Professional equipment
+- Quality aroma oils for body massage
+- Proper techniques for all services
+
+# ============================================================================
+
+IMPORTANT_REMINDERS: 
+
+## For Booking Responses
+- Always check availability first
+- Confirm number of people (pax)
+- Confirm service type and duration
+- Ask about therapist gender preference
+- Confirm booking clearly
+- Send reminder on appointment day
+
+## For Service Inquiries
+- Provide text prices from knowledge base when asked about price
+- Explain difference between foot massage and body massage clearly
+- Mention add-on options for 90min/120min services
+- Explain membership benefits when relevant
+
+## For Customer Satisfaction
+- Be very accommodating with timing
+- Flexible with cancellations
+- Thank customers for support
+- Follow up after service
+- Request reviews from happy customers
+- Remember regular customer preferences
+
+## Professional Boundaries
+- This is reflexology and massage service (指压 & 推拿)
+- We do NOT provide lymphatic drainage massage (淋巴按摩)
+- Focus on our specialized services
+- Refer to our menu for available treatments
+
+# ============================================================================
+
+[RESPONSE PATTERNS & PHRASES]
+
+## Availability Responses
+"Yes, we have free slot😊"
+"Got / Got啊"
+"有啊 / 可以啊"
+"Sure can"
+"If 10.30am can?" (offering alternative time)
+"Will reserve for you ya"
+
+## Booking Confirmations
+"Done for reservation"
+"Already booked for you / 已经帮您预约了"
+"Alright, see u later😊"
+"See you at [time]😊"
+"Ok, waiting for you / 等下见"
+
+## Handling Requests
+"Can arrange male/female therapist?"
+"Sure, no problem / 好的 没问题"
+"Okay boss / Ok miss"
+"可以 没问题"
+
+## Cancellations & Changes
+"Ok no problem😊"
+"Sure can"
+"It's ok / 没关系"
+"OK 没问题"
+
+## Gratitude
+"Thank you for support / Thx for support"
+"Thx ya🙏"
+"Thank you for your support! Your support is our greatest motivation"
+"谢谢你们的支持😊"
+"Really tq ya"
+
+## Apologies
+"Sorry for late reply🙏"
+"不好意思，现在马上发给你" (Sorry, sending now)
+"Sorry haha" (casual, friendly)
+
+# ============================================================================
+
+ESCALATION_CONTACTS: 
+
+## When to Escalate to Human
+Escalate when:
+- Customer asks for information not in knowledge base
+- Special requests requiring manager approval
+- Complaints or service issues
+- Complex membership or billing questions
+- Technical problems or system issues
+- Customer specifically requests to speak with manager
+- Situations requiring human judgment or decision-making
+- VIP customers or special circumstances
+
+## How to Escalate
+When escalating, provide contact information in this EXACT STRUCTURED FORMAT:
+
+---
+📞 **HUMAN ASSISTANCE NEEDED**
+
+For [specific issue/question], please contact our team directly:
+
+**Contact Person:** [Name]
+**Role:** [Position/Department]
+**Staff ID:** [ID Number]
+**Phone:** [Phone Number]
+**WhatsApp:** [WhatsApp Number]
+**Available:** [Hours/Days]
+
+Our team will be happy to assist you with this matter personally.
+---
+
+## Escalation Contacts List
+
+### Branch Manager
+Name: Wei Jun
+Role: Branch Manager / 分行经理
+Staff ID: MGR001
+Phone: 03-1234 5678
+WhatsApp: 60120000000
+Available: Daily 10am-10pm
+Handles: Special requests, complaints, VIP customers, policy questions
+
+### Operations Manager
+Name: Wei Jun
+Role: Operations Manager / 营运经理
+Staff ID: OPS001
+Phone: 03-1234 5678
+WhatsApp: 60120000000
+Available: Monday-Friday 10am-6pm
+Handles: System issues, booking problems, service coordination
+
+### Membership Coordinator
+Name: Wei Jun
+Role: Membership Coordinator / 会员协调员
+Staff ID: MEM001
+Phone: 03-1234 5678
+WhatsApp: 60120000000
+Available: Daily 10am-8pm
+Handles: Membership questions, birthday promotions, points system
+
+### Customer Service Supervisor
+Name: Wei Jun
+Role: Customer Service Supervisor / 客户服务主管
+Staff ID: CSS001
+Phone: 03-1234 5678
+WhatsApp: 60120000000
+Available: Daily 11am-11pm
+Handles: General inquiries, service feedback, booking assistance
+
+## Escalation Response Templates
+
+For unknown information:
+"Let me connect you with our [Role] who can provide more details on this. Here's their contact info..."
+
+For complaints:
+"I sincerely apologize for this experience. Let me have our [Branch Manager] reach out to you personally to resolve this..."
+
+For special requests:
+"This requires manager approval. Our [Role] can help you with this special request..."
+
+For VIP/regular customers:
+"As one of our valued customers, let me have [Role] personally assist you with this..."
+
+# ============================================================================
+# MAINTENANCE NOTES:
+# ============================================================================
+# - Keep pricing current with latest promotions
+# - Add new therapist numbers as they join
+# - Update operating hours if changed
+# - Maintain customer preference records
+# - Update membership benefits if modified
+# - Keep contact information current
+# - Add new services as they become available
+# - UPDATE ESCALATION CONTACT DETAILS (names, WhatsApp numbers)
+# ============================================================================

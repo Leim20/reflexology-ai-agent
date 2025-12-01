@@ -1,0 +1,116 @@
+================================================================================
+WHAPI ACCOUNT CHANGE - COMPLETION REPORT
+================================================================================
+
+Date: 2025-11-28 16:48:40
+Status: ✅ COMPLETED SUCCESSFULLY
+
+================================================================================
+CHANGES MADE
+================================================================================
+
+OLD CREDENTIALS:
+  Channel ID: 60120000000
+  Token:      <PUT_YOUR_WHAPI_API_TOKEN_HERE>
+
+NEW CREDENTIALS:
+  Channel ID: 60120000000
+  Token:      <PUT_YOUR_WHAPI_API_TOKEN_HERE>
+
+Location Updated:
+  File: /root/reflexology-agent/.env
+  Variables:
+    - WHAPI_CHANNEL_ID
+    - WHAPI_API_TOKEN
+
+================================================================================
+BACKUP
+================================================================================
+
+Previous .env backed up to:
+  /root/reflexology-agent/.env.backup_1732816920
+
+Can be restored with:
+  cp .env.backup_1732816920 .env
+
+================================================================================
+SERVICE RESTART
+================================================================================
+
+Service restarted at: 2025-11-28 16:48:40
+Service Status: ✅ RUNNING
+
+PID: 313823, 313825
+Memory: 137.3M
+Uptime: 3+ seconds (stable)
+
+================================================================================
+VERIFICATION
+================================================================================
+
+✅ Health Endpoint: RESPONDING
+   - Status: running
+   - WhatsApp Platform: enabled
+   - Knowledge Base: loaded (27,906 chars)
+
+✅ Service Logs: NO CREDENTIAL ERRORS
+   - No 401 Unauthorized errors
+   - No WHAPI authentication failures
+   - All systems initialized successfully
+
+✅ Configuration: UPDATED
+   - WHAPI_CHANNEL_ID=60120000000
+   - WHAPI_API_TOKEN=<PUT_YOUR_WHAPI_API_TOKEN_HERE>
+
+================================================================================
+WEBHOOK URL (NO CHANGE)
+================================================================================
+
+Webhook URL remains:
+  https://your-domain.com
+
+(This URL works through Nginx reverse proxy to internal port 5001)
+
+================================================================================
+NEXT STEPS
+================================================================================
+
+1. Configure webhook in new WHAPI account:
+   - Add webhook endpoint: https://your-domain.com
+   - Set to receive all message types (text, image, voice, etc.)
+
+2. Test message reception:
+   - Send test message to bot from new WHAPI account
+   - Check logs for successful webhook reception
+
+3. Monitor quota usage:
+   - Watch /logs/service.log for rate limiter activity
+   - Verify no 429 errors from new account
+
+4. (Optional) Add webhook signature:
+   - Generate WHAPI_WEBHOOK_SECRET in new account settings
+   - Update .env: WHAPI_WEBHOOK_SECRET=<secret>
+   - Restart service to enable signature verification
+
+================================================================================
+COMMANDS FOR MONITORING
+================================================================================
+
+View logs in real-time:
+  tail -f ~/reflexology-agent/logs/service.log
+
+Check service status:
+  systemctl status reflexology-agent
+
+Verify health:
+  curl http://127.0.0.1:5001/health | jq .
+
+View current credentials:
+  grep WHAPI ~/reflexology-agent/.env
+
+Restart service if needed:
+  systemctl restart reflexology-agent
+
+================================================================================
+END OF REPORT
+================================================================================

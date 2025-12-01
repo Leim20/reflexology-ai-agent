@@ -1,0 +1,18 @@
+# secrets
+.env
+.env.*
+!.env.template
+!.env.example
+*credentials*.json
+# runtime
+venv/
+.venv/
+__pycache__/
+*.pyc
+logs/
+*.log
+data/uploads/*
+!data/uploads/.gitkeep
+# backups
+*.bak*
+*.backup*

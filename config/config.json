@@ -1,0 +1,169 @@
+{
+  "agent": {
+    "name": "Jessica",
+    "role": "reflexology consultant",
+    "description": "Friendly staff member at Serenity Reflexology (Example City Branch) assisting with bookings, service inquiries, and customer questions. Provides information on foot massage, body massage, cupping, guasha, and other reflexology services. Handles membership registration, birthday promotions, and appointment scheduling. Bilingual support in English and Chinese. Natural Malaysian communication style."
+  },
+  "ai": {
+    "model": "gpt-4o",
+    "temperature": 0.7,
+    "max_tokens": 1500,
+    "enable_vision": true,
+    "enable_voice_transcription": true
+  },
+  "platforms": {
+    "web": {
+      "enabled": true,
+      "host": "0.0.0.0",
+      "port": 5001
+    },
+    "whatsapp": {
+      "enabled": true,
+      "provider": "whapi",
+      "bot_phone": ""
+    }
+  },
+  "knowledge_base": {
+    "enabled": true,
+    "path": "data/knowledge_base/catalog.txt",
+    "section_marker": "[CATALOG]",
+    "fallback_to_pdf": true,
+    "pdf_folder": "data/knowledge_base/documents"
+  },
+  "file_limits": {
+    "image_max_mb": 10,
+    "document_max_mb": 10,
+    "voice_max_mb": 15
+  },
+  "logging": {
+    "level": "DEBUG",
+    "log_dir": "logs",
+    "enable_console": true,
+    "enable_file": true,
+    "enable_error_file": true
+  },
+  "features": {
+    "conversation_export": true,
+    "response_validation": true,
+    "hallucination_detection": true
+  },
+  "escalation": {
+    "enabled": true,
+    "log_escalations": true,
+    "log_file": "logs/escalations.log",
+    "contacts": {
+      "branch_manager": {
+        "name": "Daniel",
+        "phone": "60120000000",
+        "role": "Branch Manager / 分行经理",
+        "handles": [
+          "complaints",
+          "special_requests",
+          "vip_customers",
+          "policy_questions"
+        ]
+      },
+      "operations_manager": {
+        "name": "Daniel",
+        "phone": "60120000000",
+        "role": "Operations Manager / 营运经理",
+        "handles": [
+          "system_issues",
+          "booking_problems",
+          "service_coordination"
+        ]
+      },
+      "membership_coordinator": {
+        "name": "Daniel",
+        "phone": "60120000000",
+        "role": "Membership Coordinator / 会员协调员",
+        "handles": [
+          "membership_questions",
+          "birthday_promotions",
+          "points_system"
+        ]
+      },
+      "customer_service_supervisor": {
+        "name": "Daniel",
+        "phone": "60120000000",
+        "role": "Customer Service Supervisor / 客户服务主管",
+        "handles": [
+          "general_inquiries",
+          "service_feedback",
+          "booking_assistance"
+        ]
+      }
+    }
+  },
+  "lead_tracking": {
+    "enabled": true,
+    "credentials_file": "config/<PUT_YOUR_GOOGLE_PROJECT_ID_HERE>-c123857bd130.json",
+    "spreadsheet_name": "YOUR_GOOGLE_SHEET_ID",
+    "auto_record_after_messages": 3,
+    "use_ai_analysis": true,
+    "log_lead_recording": true
+  },
+  "memory": {
+    "enabled": true,
+    "max_conversations_stored": 20,
+    "max_conversations_retrieved": 20,
+    "save_conversation_summary": true,
+    "extract_preferences": true,
+    "tiered_detail": {
+      "recent_detailed": 3,
+      "medium_detail": 10,
+      "brief_mention": 20
+    }
+  },
+  "anti_spam": {
+    "rate_limit": {
+      "enabled": true,
+      "max_messages_per_minute": 10,
+      "max_messages_per_hour": 100,
+      "burst_window_seconds": 60,
+      "burst_threshold": 5
+    },
+    "flood_detection": {
+      "enabled": true,
+      "duplicate_threshold": 3,
+      "duplicate_window_seconds": 60,
+      "similarity_threshold": 0.8
+    },
+    "cooldown": {
+      "enabled": true,
+      "min_seconds_between_messages": 2,
+      "escalate_cooldown_after_violations": true,
+      "max_cooldown_seconds": 30
+    },
+    "blocking": {
+      "enabled": true,
+      "auto_block_after_violations": 5,
+      "block_duration_minutes": 5,
+      "warning_threshold": 3
+    },
+    "whitelist": [],
+    "blacklist": []
+  },
+  "menu_image": {
+    "enabled": true,
+    "chinese_url": "https://i.im.ge/2025/12/01/4PYfgr.SERENITY-MenU-Chinese-29-Oct-pdf.png",
+    "english_url": "https://i.im.ge/2025/12/01/4Pb39a.SERENITY-Menu-29-Oct-pdf.png",
+    "send_for_keywords": [
+      "所有menu",
+      "所有价格",
+      "全部项目",
+      "价格表",
+      "full menu",
+      "all prices",
+      "complete pricing",
+      "show me everything",
+      "有什么配套",
+      "latest menu",
+      "最新价格",
+      "menu",
+      "价目表"
+    ],
+    "caption_chinese": "这是我们的完整价格表 (2025年10月)😊\n\n想要预约哪个配套呢？或者有任何问题都可以问我！",
+    "caption_english": "Here is our complete price list (October 2025)😊\n\nWhich package would you like to book? Feel free to ask if you have any questions!"
+  }
+}

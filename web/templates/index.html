@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Chat Agent - AI Assistant</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🤖 AI Chat Agent</h1>
+            <p>Chat with our AI assistant • Upload documents, images or voice messages • Get instant help</p>
+        </header>
+
+        <div class="chat-container">
+            <div class="messages" id="messages">
+                <div class="message bot-message">
+                    <div class="message-content">
+                        <strong>Assistant:</strong> Hello! 👋 Welcome! I'm your AI assistant. I'm here to help you with your questions! 😊<br><br>You can ask me questions, upload images, share documents, or send voice messages. How can I help you today?
+                    </div>
+                </div>
+            </div>
+
+            <div class="input-container">
+                <form id="chatForm" enctype="multipart/form-data">
+                    <div class="file-upload-area">
+                        <input type="file" id="fileInput" name="file" accept=".pdf,.txt,.docx,.jpg,.jpeg,.png,.mp3,.wav,.ogg,.m4a,.webm,audio/mpeg,audio/wav,audio/ogg,audio/mp4,audio/webm">
+                        <label for="fileInput" class="file-label">
+                            📎 Choose File
+                        </label>
+                        <span id="fileName" class="file-name"></span>
+                        <button type="button" id="clearFile" class="clear-file-btn" style="display: none;">✕</button>
+                    </div>
+
+                    <div class="message-input-area">
+                        <textarea
+                            id="messageInput"
+                            name="message"
+                            placeholder="Type your message here..."
+                            rows="3"
+                        ></textarea>
+                        <div class="button-group">
+                            <button type="submit" id="sendBtn" class="send-btn">Send</button>
+                            <button type="button" id="exportBtn" class="export-btn">📥 Export Chat</button>
+                            <button type="button" id="clearBtn" class="clear-btn">Clear Chat</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+        </div>
+
+        <div class="info-panel">
+            <p><strong>Supported Files:</strong></p>
+            <ul>
+                <li>Documents: PDF, DOCX, TXT (max 10 MB)</li>
+                <li>Images: JPG, PNG (max 10 MB)</li>
+                <li>Voice: MP3, WAV, OGG, M4A, WEBM (max 15 MB)</li>
+            </ul>
+        </div>
+    </div>
+
+    <script src="{{ url_for('static', filename='js/chat.js') }}"></script>
+</body>
+</html>
