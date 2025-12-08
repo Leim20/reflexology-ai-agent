@@ -9,7 +9,6 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional, List, Tuple
 import json
 from utils.logger import get_logger
-from utils.rate_limiter import throttle_if_busy, track_api_call
 from utils.cache_manager import CacheManager
 
 logger = get_logger(__name__)
@@ -159,9 +158,7 @@ class FollowUpManager:
             List of campaign dictionaries
         """
         try:
-            throttle_if_busy()
             records = self.campaigns_sheet.get_all_records()
-            track_api_call()
             active_campaigns = [
                 c for c in records
                 if str(c.get('Status', '')).lower() == 'active'
@@ -183,9 +180,7 @@ class FollowUpManager:
             Campaign dict or None
         """
         try:
-            throttle_if_busy()
             records = self.campaigns_sheet.get_all_records()
-            track_api_call()
             for campaign in records:
                 if campaign.get('Campaign ID') == campaign_id:
                     return campaign
@@ -230,9 +225,7 @@ class FollowUpManager:
                 0                    # Messages Sent
             ]
 
-            throttle_if_busy()
             self.queue_sheet.append_row(queue_entry)
-            track_api_call()
             logger.info(f"✅ Enrolled {phone} in campaign {campaign_id}")
 
             # Update analytics
@@ -256,9 +249,7 @@ class FollowUpManager:
             True if enrolled, False otherwise
         """
         try:
-            throttle_if_busy()
             records = self.queue_sheet.get_all_records()
-            track_api_call()
             for record in records:
                 if (record.get('Phone') == phone and
                     record.get('Campaign ID') == campaign_id and
@@ -277,15 +268,14 @@ class FollowUpManager:
             List of pending follow-up dictionaries
         """
         try:
-            throttle_if_busy()
             records = self.queue_sheet.get_all_records()
-            track_api_call()
             now = datetime.now()
 
             pending = []
             for record in records:
-                # Only process if status is Pending
-                if record.get('Status') != 'Pending':
+                # Only process if status is Pending or Sent (waiting for next scheduled time)
+                status = record.get('Status', '')
+                if status not in ['Pending', 'Sent']:
                     continue
 
                 # Check if it's time to send
@@ -321,11 +311,7 @@ class FollowUpManager:
         """
         try:
             # Get queue entry
-            throttle_if_busy()
-            throttle_if_busy()
             queue_records = self.queue_sheet.get_all_records()
-            track_api_call()
-            track_api_call()
             queue_entry = None
             for record in queue_records:
                 if (record.get('Phone') == phone and
@@ -373,9 +359,7 @@ class FollowUpManager:
         """
         try:
             # Find and update queue entry
-            throttle_if_busy()
             queue_records = self.queue_sheet.get_all_records()
-            track_api_call()
             row_index = None
             for idx, record in enumerate(queue_records, start=2):  # Start at 2 (skip header)
                 if (record.get('Phone') == phone and
@@ -412,7 +396,6 @@ class FollowUpManager:
 
             # Update queue entry
             msgs_sent = message_number
-            throttle_if_busy()
             self.queue_sheet.update(f'C{row_index}:H{row_index}', [[
                 next_msg,           # Current Message
                 next_send_str,      # Next Send Time
@@ -421,7 +404,6 @@ class FollowUpManager:
                 now_str,            # Last Sent Date
                 msgs_sent           # Messages Sent
             ]])
-            track_api_call()
 
             # Log to sent log
             campaign_name = campaign.get('Campaign Name', campaign_id)
@@ -436,9 +418,7 @@ class FollowUpManager:
                 '',                 # Response Time
                 ''                  # Response Text
             ]
-            throttle_if_busy()
             self.log_sheet.append_row(log_entry)
-            track_api_call()
 
             # Update analytics
             self._update_analytics_sent(campaign_id, message_number)
@@ -476,9 +456,7 @@ class FollowUpManager:
                 return False
 
             # Update status
-            throttle_if_busy()
             self.queue_sheet.update(f'E{row_index}', reason)
-            track_api_call()
             logger.info(f"✅ Stopped campaign {campaign_id} for {phone}: {reason}")
             return True
 
@@ -499,9 +477,7 @@ class FollowUpManager:
         """
         try:
             # Find all active campaigns for this lead
-            throttle_if_busy()
             queue_records = self.queue_sheet.get_all_records()
-            track_api_call()
             now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
             stopped_count = 0
@@ -510,9 +486,7 @@ class FollowUpManager:
                     record.get('Status') in ['Pending', 'Sent']):
 
                     # Stop this campaign
-                    throttle_if_busy()
                     self.queue_sheet.update(f'E{idx}', 'Responded')
-                    track_api_call()
                     stopped_count += 1
 
                     # Update sent log if there's a recent message
@@ -531,9 +505,7 @@ class FollowUpManager:
     def _update_log_response(self, phone: str, campaign_id: str, response_text: str, response_time: str):
         """Update the sent log with response information"""
         try:
-            throttle_if_busy()
             log_records = self.log_sheet.get_all_records()
-            track_api_call()
             # Find most recent log entry for this phone/campaign
             row_index = None
             for idx in range(len(log_records), 0, -1):  # Search backwards
@@ -545,13 +517,11 @@ class FollowUpManager:
                     break
 
             if row_index:
-                throttle_if_busy()
                 self.log_sheet.update(f'G{row_index}:I{row_index}', [[
                     'Yes',              # Response Received
                     response_time,      # Response Time
                     response_text[:100] # Response Text (truncated)
                 ]])
-                track_api_call()
         except Exception as e:
             logger.error(f"⚠️  Error updating log response: {e}")
 
@@ -581,9 +551,7 @@ class FollowUpManager:
             Dictionary with stats
         """
         try:
-            throttle_if_busy()
             queue_records = self.queue_sheet.get_all_records()
-            track_api_call()
 
             stats = {
                 'total_enrolled': len(queue_records),
@@ -765,3 +733,227 @@ class FollowUpManager:
         except Exception as e:
             logger.error(f"❌ Error checking and enrolling leads: {e}")
             return {'enrolled': 0, 'skipped': 0}
+
+    # ============================================================================
+    # BATCH OPERATIONS FOR MINIMAL QUOTA SYSTEM
+    # ============================================================================
+
+    def batch_mark_status_queued(self, messages: List[Dict[str, Any]]) -> bool:
+        """
+        Batch update status for multiple messages to 'Queued'
+
+        Called by check job after adding messages to in-memory queue
+        Marks them so they won't be checked again until processing is done
+
+        Args:
+            messages: List of message dicts with 'Phone' and 'Campaign ID'
+
+        Returns:
+            True if update successful
+        """
+        try:
+            if not messages:
+                return True
+
+            # Get all queue records with row indices
+            records = self.queue_sheet.get_all_records()
+
+            # Build mapping of (phone, campaign_id) -> row_index
+            message_rows = {}
+            for idx, record in enumerate(records, start=2):  # Start at 2 (skip header)
+                key = (record.get('Phone'), record.get('Campaign ID'))
+                message_rows[key] = idx
+
+            # Update status to 'Queued' for each message
+            updates = []
+            for msg in messages:
+                phone = msg.get('Phone')
+                campaign_id = msg.get('Campaign ID')
+                key = (phone, campaign_id)
+
+                if key in message_rows:
+                    row_idx = message_rows[key]
+                    # Status is column E (5)
+                    updates.append({
+                        'range': f'E{row_idx}',
+                        'values': [['Queued']]
+                    })
+
+            # Batch update (gspread batch_update)
+            if updates:
+                self.queue_sheet.batch_update(updates)
+                logger.info(f"✅ Batch marked {len(updates)} messages as 'Queued'")
+                return True
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error batch marking status: {e}")
+            return False
+
+    def batch_update_queue(self, updates: List[Dict[str, Any]]) -> bool:
+        """
+        Batch update multiple queue entries after messages are sent
+
+        Args:
+            updates: List of dicts with:
+                - phone: str
+                - campaign_id: str
+                - message_num: int (just sent)
+                - status: str ('Sent' or 'Failed')
+
+        Returns:
+            True if successful
+        """
+        try:
+            if not updates:
+                return True
+
+            # Get all queue records with row indices
+            records = self.queue_sheet.get_all_records()
+
+            # Build mapping of (phone, campaign_id) -> (row_index, record)
+            message_rows = {}
+            for idx, record in enumerate(records, start=2):  # Start at 2 (skip header)
+                key = (record.get('Phone'), record.get('Campaign ID'))
+                message_rows[key] = (idx, record)
+
+            # Prepare batch update
+            batch_updates = []
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            for update in updates:
+                phone = update.get('phone')
+                campaign_id = update.get('campaign_id')
+                message_num = update.get('message_num')
+                status = update.get('status', 'Sent')
+                key = (phone, campaign_id)
+
+                if key not in message_rows:
+                    logger.warning(f"⚠️  Queue entry not found: {phone}, {campaign_id}")
+                    continue
+
+                row_idx, record = message_rows[key]
+
+                # Get campaign to calculate next send time
+                campaign = self.get_campaign_by_id(campaign_id)
+                if not campaign:
+                    logger.warning(f"⚠️  Campaign not found: {campaign_id}")
+                    continue
+
+                # Calculate next send time
+                if message_num < 3:
+                    gap_key = f'Gap Hours {message_num}→{message_num + 1}'
+                    gap_hours = int(campaign.get(gap_key, 48))
+                    next_send = datetime.now() + timedelta(hours=gap_hours)
+                    next_send_str = next_send.strftime('%Y-%m-%d %H:%M:%S')
+                    next_msg = message_num + 1
+                    # Status: 'Sent' means message sent, waiting for next scheduled time
+                    final_status = 'Sent'
+                else:
+                    next_send_str = ''
+                    next_msg = 3
+                    # Status: 'Completed' means all messages in campaign sent
+                    final_status = 'Completed'
+
+                # Update individual columns to avoid offset issues with empty Enrolled Date
+                # C = Current Message, D = Next Send Time, E = Status, F = Enrolled Date (skip), G = Last Sent Date, H = Messages Sent
+                batch_updates.append({'range': f'C{row_idx}', 'values': [[next_msg]]})
+                batch_updates.append({'range': f'D{row_idx}', 'values': [[next_send_str]]})
+                batch_updates.append({'range': f'E{row_idx}', 'values': [[final_status]]})
+                # Skip F (Enrolled Date - keep existing)
+                batch_updates.append({'range': f'G{row_idx}', 'values': [[now]]})
+                batch_updates.append({'range': f'H{row_idx}', 'values': [[message_num]]})
+
+            # Execute batch update
+            if batch_updates:
+                self.queue_sheet.batch_update(batch_updates)
+                logger.info(f"✅ Batch updated {len(batch_updates)} queue entries")
+                return True
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error batch updating queue: {e}")
+            return False
+
+    def batch_append_logs(self, updates: List[Dict[str, Any]]) -> bool:
+        """
+        Batch append multiple entries to the sent log
+
+        Args:
+            updates: List of dicts with:
+                - phone: str
+                - campaign_id: str
+                - campaign_name: str (optional, will fetch if missing)
+                - message_num: int
+                - message_text: str
+                - status: str ('Sent' or 'Failed')
+                - error: str (optional, error message if failed)
+
+        Returns:
+            True if successful
+        """
+        try:
+            if not updates:
+                return True
+
+            log_entries = []
+            now = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            for update in updates:
+                phone = update.get('phone')
+                campaign_id = update.get('campaign_id')
+                message_num = update.get('message_num')
+                message_text = update.get('message_text')
+                status = update.get('status', 'Sent')
+
+                # Get campaign name
+                campaign_name = update.get('campaign_name')
+                if not campaign_name:
+                    campaign = self.get_campaign_by_id(campaign_id)
+                    campaign_name = campaign.get('Campaign Name', campaign_id) if campaign else campaign_id
+
+                # Build log entry
+                if status == 'Sent':
+                    log_entry = [
+                        phone,
+                        campaign_id,
+                        campaign_name,
+                        message_num,
+                        message_text,
+                        now,
+                        'No',               # Response Received
+                        '',                 # Response Time
+                        ''                  # Response Text
+                    ]
+                else:
+                    # Failed status
+                    error = update.get('error', 'Unknown error')
+                    log_entry = [
+                        phone,
+                        campaign_id,
+                        campaign_name,
+                        message_num,
+                        f"[FAILED] {message_text}",
+                        now,
+                        'Failed',
+                        '',
+                        error
+                    ]
+
+                log_entries.append(log_entry)
+
+            # Batch append to log sheet
+            if log_entries:
+                self.log_sheet.batch_update([
+                    {'range': 'A:I', 'values': log_entries}
+                ])
+                logger.info(f"✅ Batch appended {len(log_entries)} log entries")
+                return True
+
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Error batch appending logs: {e}")
+            return False

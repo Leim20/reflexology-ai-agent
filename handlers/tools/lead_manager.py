@@ -78,6 +78,15 @@ class LeadManager:
                 logger.warning("   Run scripts/setup_members_sheet.py to create it")
                 self.members_sheet = None
 
+            # NEW: Bookings sheet for booking tracking
+            try:
+                self.bookings_sheet = self.spreadsheet.worksheet("Bookings")
+                logger.info("✓ Bookings sheet found")
+            except gspread.WorksheetNotFound:
+                logger.warning("⚠️ Bookings sheet not found - booking functions will not work")
+                logger.warning("   Run scripts/setup_booking_sheet.py to create it")
+                self.bookings_sheet = None
+
             # Keep reference to main sheet for backward compatibility
             self.sheet = self.customer_sheet
 
@@ -120,13 +129,20 @@ class LeadManager:
             logger.info(f"   Column Mapping: Name→A, Phone→B, Interest→C, LastVisit→D, Preferences→E, TotalConvs→F, LastUpdated→G")
 
             # Initialize cache manager for reducing API calls
+            # ⭐ FIX #5: Increased cache TTL from 60 to 300 seconds (5 minutes)
             logger.info("=" * 80)
             logger.info("Initializing CACHE MANAGER for Lead Manager...")
-            self.cache_manager = CacheManager(default_ttl=60)  # 60 second cache
-            logger.info("   Cache TTL: 60 seconds (customer data)")
+            self.cache_manager = CacheManager(default_ttl=300)  # 300 second cache (5 minutes)
+            logger.info("   Cache TTL: 300 seconds (5 minutes) - was 60 seconds")
             logger.info("   Cache will reduce Google Sheets API calls by 80-90%")
             logger.info("CACHE MANAGER initialized successfully")
             logger.info("=" * 80)
+
+            # ⭐ FIX #2: Load all members into cache on startup
+            if self.members_sheet:
+                logger.info("Loading all members into cache on startup...")
+                self._refresh_members_cache()
+                logger.info("✅ Members cache initialized")
 
         except FileNotFoundError:
             logger.error(f"❌ Credentials file not found: {credentials_file}")
@@ -138,6 +154,45 @@ class LeadManager:
         except Exception as e:
             logger.error(f"❌ Failed to initialize Lead Manager: {e}")
             raise
+
+
+    def _refresh_members_cache(self):
+        """
+        ⭐ FIX #2: Load all members into cache on startup
+        This eliminates repeated API calls for member lookups
+        Cache is refreshed every 300 seconds (5 minutes)
+        """
+        try:
+            logger.info("🔄 Refreshing members cache...")
+
+            # Fetch all members with single API call
+            throttle_if_busy()
+            all_members_rows = self.members_sheet.get_all_values()
+            track_api_call()
+
+            # Build members dictionary (phone -> member_info)
+            members_dict = {}
+            for idx, row_data in enumerate(all_members_rows[1:], start=2):  # Skip header
+                if len(row_data) > 0 and row_data[0]:  # Has phone number
+                    # Normalize phone
+                    normalized_phone = row_data[0].replace('+', '').replace('-', '').replace(' ', '').replace('@s.whatsapp.net', '')
+
+                    members_dict[normalized_phone] = {
+                        'phone': row_data[0] if len(row_data) > 0 else '',
+                        'name': row_data[1] if len(row_data) > 1 else '',
+                        'birthday': row_data[2] if len(row_data) > 2 else '',
+                        'registration_date': row_data[3] if len(row_data) > 3 else '',
+                        'points': int(row_data[4]) if len(row_data) > 4 and row_data[4] else 0,
+                        'birthday_benefit_used': row_data[5] if len(row_data) > 5 else 'No',
+                        'row': idx
+                    }
+
+            # Store in cache with 300 second TTL
+            self.cache_manager.set("all_members", members_dict, ttl=300)
+            logger.info(f"✅ Cached {len(members_dict)} members (TTL: 300s)")
+
+        except Exception as e:
+            logger.error(f"❌ Failed to refresh members cache: {e}")
 
 
     def _retry_on_quota(self, func, max_attempts=3):
@@ -429,6 +484,9 @@ Examples:
         conversation_text = ""
         for msg in messages[-10:]:
             role = msg.get('role', 'unknown')
+            # Skip system messages (they contain the knowledge base - not needed for analysis)
+            if role == 'system':
+                continue
             content = msg.get('content', '')
             if isinstance(content, str) and content.strip():
                 speaker = "Customer" if role == "user" else "Jessica"
@@ -486,6 +544,7 @@ Examples:
         Get last 20 conversations for a specific customer from history sheet
         Filters mixed data to return ONLY this customer's conversations
         ⭐ WITH CACHING: Reduces API calls from 21+ to 1 (after cache hit)
+        ⭐ OPTIMIZED: Single get_all_values() call instead of N+1 queries
 
         Args:
             phone: Customer phone number
@@ -513,37 +572,42 @@ Examples:
             # ⭐ CACHE MISS: Fetch from API
             logger.info(f"   CACHE MISS: Fetching from Google Sheets API...")
 
-            # Find all rows with this phone number (filters mixed data!)
+            # ⭐ FIX #1: Use single get_all_values() call instead of findall() + row_values() loop
+            # This changes from 1+N API calls to just 1 API call
             throttle_if_busy()
-            matching_cells = self.history_sheet.findall(normalized_phone)
+            all_rows = self.history_sheet.get_all_values()
             track_api_call()
+            logger.info(f"   ✅ Fetched all history rows with SINGLE API call (was 1+N calls)")
 
-            if not matching_cells:
+            if not all_rows or len(all_rows) <= 1:
                 logger.info(f"   No conversation history found for {phone}")
                 # Cache empty result to avoid repeated searches
                 self.cache_manager.set(cache_key, [], ttl=300)  # Cache for 5 minutes
                 return []
 
-            # Extract conversation data from matching rows
+            # Filter rows in Python (skip header row)
             conversations = []
-            for cell in matching_cells:
-                row_num = cell.row
-                throttle_if_busy()
-                row_data = self.history_sheet.row_values(row_num)
-                track_api_call()
+            for idx, row_data in enumerate(all_rows[1:], start=2):  # Start at row 2 (skip header)
+                if len(row_data) > 0:
+                    # Normalize the phone in this row
+                    row_phone = row_data[0].replace('+', '').replace('-', '').replace(' ', '').replace('@s.whatsapp.net', '')
 
-                # Skip header row
-                if row_num == 1:
-                    continue
+                    # Check if this row matches our customer
+                    if row_phone == normalized_phone:
+                        conversations.append({
+                            'phone': row_data[0] if len(row_data) > 0 else '',
+                            'date': row_data[1] if len(row_data) > 1 else '',
+                            'summary': row_data[2] if len(row_data) > 2 else '',
+                            'category': row_data[3] if len(row_data) > 3 else '',
+                            'confidence': row_data[4] if len(row_data) > 4 else '',
+                            'row': idx
+                        })
 
-                conversations.append({
-                    'phone': row_data[0] if len(row_data) > 0 else '',
-                    'date': row_data[1] if len(row_data) > 1 else '',
-                    'summary': row_data[2] if len(row_data) > 2 else '',
-                    'category': row_data[3] if len(row_data) > 3 else '',
-                    'confidence': row_data[4] if len(row_data) > 4 else '',
-                    'row': row_num
-                })
+            if not conversations:
+                logger.info(f"   No conversation history found for {phone}")
+                # Cache empty result
+                self.cache_manager.set(cache_key, [], ttl=300)
+                return []
 
             # Sort by date (most recent last)
             conversations.sort(key=lambda x: x['date'])
@@ -613,7 +677,7 @@ Examples:
             # ⭐ CACHE INVALIDATION: Clear cached history for this customer
             # Next call to get_conversation_history() will fetch fresh data from API
             cache_key = f"conversation_history:{normalized_phone}"
-            self.cache_manager.delete(cache_key)
+            self.cache_manager.invalidate(cache_key)
             logger.info(f"   📝 Cache invalidated for {normalized_phone}")
 
             return True
@@ -722,6 +786,9 @@ Example: "Female therapist, 90min body massage, evening slots"
         conversation_text = ""
         for msg in messages[-10:]:
             role = msg.get('role')
+            # Skip system messages (they contain the knowledge base - not needed for extraction)
+            if role == 'system':
+                continue
             content = msg.get('content', '')
             if isinstance(content, str) and content.strip():
                 speaker = "Customer" if role == "user" else "Agent"
@@ -845,6 +912,7 @@ Example: "Female therapist, 90min body massage, evening slots"
     def check_if_member(self, phone: str) -> bool:
         """
         Check if a customer is a registered member
+        ⭐ FIX #2: Uses cached members data instead of API calls
 
         Args:
             phone: Customer phone number
@@ -862,25 +930,21 @@ Example: "Female therapist, 90min body massage, evening slots"
             # Normalize phone number
             normalized_phone = phone.replace('+', '').replace('-', '').replace(' ', '').replace('@s.whatsapp.net', '')
 
-            # Search for phone in Members sheet (Column A)
-            throttle_if_busy()
-            phone_column = self.members_sheet.col_values(self.members_columns['phone'])
-            track_api_call()
+            # ⭐ FIX #2: Check cache first
+            members_dict = self.cache_manager.get("all_members")
 
-            for idx, cell_phone in enumerate(phone_column):
-                # Skip header row
-                if idx == 0:
-                    continue
+            if members_dict is None:
+                # Cache expired or not loaded, refresh it
+                logger.info("   Cache miss - refreshing members cache...")
+                self._refresh_members_cache()
+                members_dict = self.cache_manager.get("all_members") or {}
+            else:
+                logger.info(f"   CACHE HIT: Using cached members data ({len(members_dict)} members)")
 
-                if not cell_phone:
-                    continue
-
-                # Normalize cell phone
-                normalized_cell = cell_phone.replace('+', '').replace('-', '').replace(' ', '')
-
-                if normalized_cell == normalized_phone:
-                    logger.info(f"✅ Member found at row {idx + 1}")
-                    return True
+            # Check if phone exists in cached members
+            if normalized_phone in members_dict:
+                logger.info(f"✅ Member found in cache at row {members_dict[normalized_phone]['row']}")
+                return True
 
             logger.info(f"📭 Not a member")
             return False
@@ -893,6 +957,7 @@ Example: "Female therapist, 90min body massage, evening slots"
     def get_member_info(self, phone: str) -> Optional[Dict[str, Any]]:
         """
         Get member information from Members sheet
+        ⭐ FIX #2: Uses cached members data instead of API calls
 
         Args:
             phone: Customer phone number
@@ -919,42 +984,25 @@ Example: "Female therapist, 90min body massage, evening slots"
             # Normalize phone number
             normalized_phone = phone.replace('+', '').replace('-', '').replace(' ', '').replace('@s.whatsapp.net', '')
 
-            # Search for phone in Members sheet
-            phone_column = self.members_sheet.col_values(self.members_columns['phone'])
+            # ⭐ FIX #2: Check cache first
+            members_dict = self.cache_manager.get("all_members")
 
-            for idx, cell_phone in enumerate(phone_column):
-                # Skip header row
-                if idx == 0:
-                    continue
+            if members_dict is None:
+                # Cache expired or not loaded, refresh it
+                logger.info("   Cache miss - refreshing members cache...")
+                self._refresh_members_cache()
+                members_dict = self.cache_manager.get("all_members") or {}
+            else:
+                logger.info(f"   CACHE HIT: Using cached members data ({len(members_dict)} members)")
 
-                if not cell_phone:
-                    continue
-
-                # Normalize cell phone
-                normalized_cell = cell_phone.replace('+', '').replace('-', '').replace(' ', '')
-
-                if normalized_cell == normalized_phone:
-                    row_num = idx + 1
-                    logger.info(f"✅ Member found at row {row_num}")
-
-                    # Get entire row data
-                    row_data = self.members_sheet.row_values(row_num)
-
-                    member_info = {
-                        'phone': row_data[0] if len(row_data) > 0 else '',
-                        'name': row_data[1] if len(row_data) > 1 else '',
-                        'birthday': row_data[2] if len(row_data) > 2 else '',
-                        'registration_date': row_data[3] if len(row_data) > 3 else '',
-                        'points': int(row_data[4]) if len(row_data) > 4 and row_data[4] else 0,
-                        'birthday_benefit_used': row_data[5] if len(row_data) > 5 else 'No',
-                        'row': row_num
-                    }
-
-                    logger.info(f"   Name: {member_info['name']}")
-                    logger.info(f"   Birthday: {member_info['birthday']}")
-                    logger.info(f"   Points: {member_info['points']}")
-
-                    return member_info
+            # Get member from cache
+            if normalized_phone in members_dict:
+                member_info = members_dict[normalized_phone]
+                logger.info(f"✅ Member found in cache at row {member_info['row']}")
+                logger.info(f"   Name: {member_info['name']}")
+                logger.info(f"   Birthday: {member_info['birthday']}")
+                logger.info(f"   Points: {member_info['points']}")
+                return member_info
 
             logger.info("📭 Member not found")
             return None
@@ -1027,13 +1075,28 @@ Example: "Female therapist, 90min body massage, evening slots"
                     logger.info("Updating existing member information...")
                     row_num = existing_member['row']
 
+                    # ⭐ FIX #3: Batch cell updates using update_cells() - changes 2 calls to 1
+                    from gspread import Cell
+                    cells_to_update = []
+
                     if name and name != existing_member['name']:
-                        self.members_sheet.update_cell(row_num, self.members_columns['name'], name)
-                        logger.info(f"   Updated name: {name}")
+                        cells_to_update.append(Cell(row_num, self.members_columns['name'], name))
+                        logger.info(f"   Updating name: {name}")
 
                     if birthday and birthday != existing_member['birthday']:
-                        self.members_sheet.update_cell(row_num, self.members_columns['birthday'], birthday)
-                        logger.info(f"   Updated birthday: {birthday}")
+                        cells_to_update.append(Cell(row_num, self.members_columns['birthday'], birthday))
+                        logger.info(f"   Updating birthday: {birthday}")
+
+                    # Batch update all fields in single API call
+                    if cells_to_update:
+                        throttle_if_busy()
+                        self.members_sheet.update_cells(cells_to_update)
+                        track_api_call()
+                        logger.info(f"   ✅ Batch updated {len(cells_to_update)} fields (1 API call instead of {len(cells_to_update)})")
+
+                    # ⭐ FIX #2: Invalidate members cache after update
+                    self.cache_manager.invalidate("all_members")
+                    logger.info("   Members cache invalidated - will refresh on next lookup")
 
                     return {
                         'success': True,
@@ -1086,6 +1149,10 @@ Example: "Female therapist, 90min body massage, evening slots"
 
             logger.info(f"✅ Member registered successfully at row {row_num}")
 
+            # ⭐ FIX #2: Invalidate members cache so next lookup will refresh
+            self.cache_manager.invalidate("all_members")
+            logger.info("   Members cache invalidated - will refresh on next lookup")
+
             return {
                 'success': True,
                 'message': 'Member registered successfully',
@@ -1101,4 +1168,168 @@ Example: "Female therapist, 90min body massage, evening slots"
                 'message': str(e),
                 'action': 'failed',
                 'row': None
+            }
+
+    def record_booking(
+        self,
+        customer_name: str,
+        customer_gender: str,
+        customer_phone: str,
+        booking_date: str,
+        booking_time: str,
+        service: str,
+        therapist_gender: str
+    ) -> Dict[str, Any]:
+        """
+        Record a confirmed booking to the Bookings sheet
+
+        Args:
+            customer_name: Customer's name
+            customer_gender: Male/Female
+            customer_phone: Customer's phone number
+            booking_date: Date of appointment
+            booking_time: Time of appointment
+            service: Service type and duration
+            therapist_gender: Male/Female therapist
+
+        Returns:
+            dict: {
+                'success': bool,
+                'message': str,
+                'row': int (row number where booking was recorded)
+            }
+        """
+        logger.info("="*80)
+        logger.info("?? RECORDING BOOKING TO GOOGLE SHEETS")
+        logger.info("="*80)
+
+        if not self.bookings_sheet:
+            logger.error("? Bookings sheet not initialized")
+            return {
+                'success': False,
+                'message': 'Bookings sheet not found. Run scripts/setup_booking_sheet.py'
+            }
+
+        try:
+            # Get current timestamp
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Prepare booking data
+            booking_data = [
+                customer_name,
+                customer_gender,
+                customer_phone,
+                booking_date,
+                booking_time,
+                service,
+                therapist_gender,
+                timestamp
+            ]
+
+            logger.info(f"Name: {customer_name}")
+            logger.info(f"Gender: {customer_gender}")
+            logger.info(f"Phone: {customer_phone}")
+            logger.info(f"Date: {booking_date}")
+            logger.info(f"Time: {booking_time}")
+            logger.info(f"Service: {service}")
+            logger.info(f"Therapist: {therapist_gender}")
+
+            # Append to sheet
+            logger.info("Appending to Bookings sheet...")
+            self.bookings_sheet.append_row(booking_data)
+
+            # Get the row number
+            all_records = self.bookings_sheet.get_all_values()
+            row_number = len(all_records)
+
+            logger.info(f"? Booking recorded successfully at row {row_number}")
+            logger.info("="*80)
+
+            return {
+                'success': True,
+                'message': 'Booking recorded successfully',
+                'row': row_number
+            }
+
+        except Exception as e:
+            logger.error(f"? Failed to record booking: {str(e)}")
+            logger.exception("Full error traceback:")
+            logger.info("="*80)
+            return {
+                'success': False,
+                'message': f'Error recording booking: {str(e)}'
+            }
+
+    def get_bookings(self, customer_phone: str) -> Dict[str, Any]:
+        """
+        Search for bookings by phone number with caching
+
+        Args:
+            customer_phone: Customer's phone number to search
+
+        Returns:
+            dict: {
+                'success': bool,
+                'bookings': list of matching booking dicts,
+                'count': int
+            }
+        """
+        logger.info("="*80)
+        logger.info(f"🔍 SEARCHING BOOKINGS FOR: {customer_phone}")
+        logger.info("="*80)
+
+        if not self.bookings_sheet:
+            logger.error("❌ Bookings sheet not initialized")
+            return {
+                'success': False,
+                'bookings': [],
+                'count': 0,
+                'message': 'Bookings sheet not available'
+            }
+
+        try:
+            # Check cache first
+            cache_key = 'all_bookings'
+            all_bookings = self.cache_manager.get(cache_key)
+
+            if all_bookings is None:
+                # Cache miss - fetch from sheets
+                logger.info("📥 Cache miss - fetching from Google Sheets...")
+                all_bookings = self.bookings_sheet.get_all_records()
+                self.cache_manager.set(cache_key, all_bookings)
+                logger.info(f"✓ Cached {len(all_bookings)} bookings (TTL: 300s)")
+            else:
+                logger.info(f"✓ Cache hit - using cached data ({len(all_bookings)} bookings)")
+
+            # Search for matching phone number
+            # Normalize phone for comparison (remove spaces, dashes, etc)
+            normalized_search = ''.join(filter(str.isdigit, customer_phone))
+
+            matching_bookings = []
+            for booking in all_bookings:
+                booking_phone = str(booking.get('Phone', ''))
+                normalized_booking_phone = ''.join(filter(str.isdigit, booking_phone))
+
+                if normalized_search in normalized_booking_phone or normalized_booking_phone in normalized_search:
+                    matching_bookings.append(booking)
+
+            logger.info(f"✅ Found {len(matching_bookings)} matching booking(s)")
+            logger.info("="*80)
+
+            return {
+                'success': True,
+                'bookings': matching_bookings,
+                'count': len(matching_bookings),
+                'message': f'Found {len(matching_bookings)} booking(s)'
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Failed to search bookings: {str(e)}")
+            logger.exception("Full error traceback:")
+            logger.info("="*80)
+            return {
+                'success': False,
+                'bookings': [],
+                'count': 0,
+                'message': f'Error searching bookings: {str(e)}'
             }

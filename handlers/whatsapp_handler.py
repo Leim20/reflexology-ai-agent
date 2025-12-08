@@ -395,7 +395,7 @@ class WhatsAppHandler(BasePlatformHandler):
         Download media from Whapi
 
         Args:
-            media_data (dict): Media information with 'url' key
+            media_data (dict): Media information with 'url' or 'link' key
 
         Returns:
             dict or None: Processed media information
@@ -403,9 +403,10 @@ class WhatsAppHandler(BasePlatformHandler):
         logger.info(f"Processing media from Whapi")
         logger.debug(f"Media data: {media_data}")
 
-        url = media_data.get('url')
+        # Whapi may provide media either as 'url' or 'link'
+        url = media_data.get('url') or media_data.get('link')
         if not url:
-            logger.error("No URL in media data")
+            logger.error("No URL/link in media data")
             return None
 
         try:

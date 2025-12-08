@@ -103,6 +103,28 @@
     "use_ai_analysis": true,
     "log_lead_recording": true
   },
+  "google_sheets_features": {
+    "follow_up_system": {
+      "enabled": true,
+      "description": "Auto follow-up campaigns for leads (includes campaigns, queue, sent log, analytics). Saves 2 API reads per message when disabled.",
+      "sheets": ["follow_up_campaigns", "follow_up_queue", "follow_up_sent_log", "follow_up_analytics"]
+    },
+    "membership_system": {
+      "enabled": true,
+      "description": "Member registration and loyalty points system. Saves 1 API read per 5 minutes when disabled.",
+      "sheets": ["members"]
+    },
+    "conversation_history": {
+      "enabled": true,
+      "description": "Store and retrieve customer conversation history. Saves 1 API read per message when disabled.",
+      "sheets": ["conversation_history"]
+    },
+    "lead_tracking": {
+      "enabled": true,
+      "description": "Track customer leads and interactions. Saves 1 API read per message when disabled.",
+      "sheets": ["customer_record"]
+    }
+  },
   "memory": {
     "enabled": true,
     "max_conversations_stored": 20,
@@ -163,7 +185,7 @@
       "menu",
       "价目表"
     ],
-    "caption_chinese": "这是我们的完整价格表 (2025年10月)😊\n\n想要预约哪个配套呢？或者有任何问题都可以问我！",
-    "caption_english": "Here is our complete price list (October 2025)😊\n\nWhich package would you like to book? Feel free to ask if you have any questions!"
+    "caption_chinese": "",
+    "caption_english": ""
   }
 }

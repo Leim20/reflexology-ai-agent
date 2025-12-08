@@ -20,10 +20,11 @@ from core import load_config, get_config, AIEngine, ConversationManager, Respons
 from handlers import WhatsAppHandler, WebHandler
 from handlers.tools import process_document, process_image, process_voice, create_escalation_tool
 from handlers.tools.lead_manager import LeadManager
-from utils.rate_limiter import throttle_if_busy
 from handlers.tools.follow_up_manager import FollowUpManager
 from handlers.tools.broadcast_manager import BroadcastManager
 from utils import setup_logging, get_logger, check_file_size, allowed_file
+from utils.followup_queue import followup_message_queue
+from utils.batch_manager import followup_batch_manager
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -243,6 +244,8 @@ def init_app():
                 spreadsheet_name=spreadsheet_name
             )
             logger.info("✓ Lead Manager initialized")
+            # Delay to avoid Google Sheets API burst limit during startup
+            time.sleep(2)
 
             # Initialize Follow-up Manager (uses same credentials)
             try:
@@ -251,9 +254,11 @@ def init_app():
                     spreadsheet_name=spreadsheet_name
                 )
                 logger.info("✓ Follow-up Manager initialized")
+                time.sleep(2)  # Delay before BroadcastManager init
             except Exception as e:
                 logger.error(f"❌ Failed to initialize Follow-up Manager: {e}")
                 logger.warning("   Follow-up campaigns will be disabled")
+                time.sleep(2)  # Still delay on failure to protect BroadcastManager
                 follow_up_manager = None
 
             # Initialize Broadcast Manager (uses same credentials)
@@ -312,20 +317,46 @@ def init_app():
             replace_existing=True
         )
 
-        # Job 2: Process pending follow-ups (every 5 minutes)
+        # Job 2: MINIMAL QUOTA - Check and queue follow-ups (every 3 minutes)
+        # Reads ready messages and adds to in-memory queue (1 API call per check)
         scheduler.add_job(
-            func=process_pending_followups_job,
+            func=check_and_queue_followups_job,
             trigger='interval',
-            minutes=5,
-            seconds=random.randint(-30, 30),  # Fix #5: Add jitter
-            id='process_followups',
-            name='Process and send pending follow-up messages',
+            minutes=3,
+            seconds=random.randint(-30, 30),
+            id='check_queue_followups',
+            name='Check and queue follow-up messages (minimal quota)',
             replace_existing=True
         )
 
-        logger.info("✓ Follow-up scheduler jobs registered")
-        logger.info("   - Check enrollments: Every 10 minutes")
-        logger.info("   - Process follow-ups: Every 5 minutes")
+        # Job 3: MINIMAL QUOTA - Throttled send (every 3 seconds)
+        # Pulls 1 message from in-memory queue, sends it (0 API calls per send)
+        scheduler.add_job(
+            func=throttled_send_followup_job,
+            trigger='interval',
+            seconds=3,
+            id='throttled_send_followups',
+            name='Throttled follow-up message sending',
+            replace_existing=True
+        )
+
+        # Job 4: MINIMAL QUOTA - Flush batch updates (every 30 minutes)
+        # Writes all accumulated updates to sheets (3 API calls per flush)
+        scheduler.add_job(
+            func=flush_batch_updates_job,
+            trigger='interval',
+            minutes=30,
+            seconds=random.randint(-30, 30),
+            id='flush_batch_updates',
+            name='Flush batch follow-up updates to sheets',
+            replace_existing=True
+        )
+
+        logger.info("✓ Follow-up scheduler jobs registered (MINIMAL QUOTA MODE)")
+        logger.info("   - Check & enroll: Every 10 minutes")
+        logger.info("   - Check & queue: Every 3 minutes")
+        logger.info("   - Throttled send: Every 3 seconds")
+        logger.info("   - Batch flush: Every 30 minutes")
     else:
         logger.warning("⚠️  Follow-up scheduler jobs not registered (missing dependencies)")
 
@@ -378,67 +409,208 @@ def check_and_enroll_leads_job():
         logger.error(f"❌ [SCHEDULER] Error in check_and_enroll_leads_job: {e}")
 
 
-def process_pending_followups_job():
+def check_and_queue_followups_job():
     """
-    Scheduler job: Process and send pending follow-up messages
-    Runs every 5 minutes
+    MINIMAL QUOTA - Check and queue follow-ups (every 3 minutes)
+
+    Purpose:
+    - Find all messages ready to send
+    - Add them to in-memory queue (not Google Sheets)
+    - Mark status as 'Queued' in sheets so they won't be checked again
+
+    API Calls:
+    - 1 API call to read queue sheet
+    - ~1 API call to batch mark status (deferred if batch_mark_status_queued batches well)
+
+    Total: ~2 API calls per check
+    Frequency: Every 3 minutes = 20 times per hour = 40 API calls per hour
+    """
+    try:
+        if not follow_up_manager:
+            return
+
+        logger.debug("🔄 [SCHEDULER] Running check_and_queue_followups_job...")
+
+        # Get all pending follow-ups from sheets
+        pending = follow_up_manager.get_pending_followups()
+
+        if not pending:
+            logger.debug("   No pending follow-ups found")
+            return
+
+        logger.info(f"📬 [SCHEDULER] Found {len(pending)} messages ready to send")
+
+        # Add each to in-memory queue
+        queued_count = 0
+        for followup in pending:
+            phone = followup.get('Phone', '')
+            campaign_id = followup.get('Campaign ID', '')
+            message_num = int(followup.get('Current Message', 1))
+
+            if not phone or not campaign_id:
+                logger.warning("   ⚠️  Invalid phone or campaign_id in follow-up record")
+                continue
+
+            # Add to in-memory queue (0 API calls)
+            if followup_message_queue.add_message(phone, campaign_id, message_num):
+                queued_count += 1
+
+        # Mark all as 'Queued' in sheets so they're not checked again
+        if pending:
+            follow_up_manager.batch_mark_status_queued(pending)
+
+        logger.info(f"✅ [SCHEDULER] Queued {queued_count}/{len(pending)} messages (queue size: {followup_message_queue.size()})")
+
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Error in check_and_queue_followups_job: {e}")
+
+
+def throttled_send_followup_job():
+    """
+    MINIMAL QUOTA - Throttled send (every 3 seconds)
+
+    Purpose:
+    - Pull 1 message from in-memory queue
+    - Send via WhatsApp
+    - Add update to batch (don't write to sheets immediately)
+
+    API Calls:
+    - 0 API calls (everything in memory or WhatsApp)
+
+    Total: 0 API calls per send
+    Frequency: Every 3 seconds = max 20 per minute = mostly idle
+    Batch flushes: Every 30 minutes = 2 per hour = 6 API calls per hour
     """
     try:
         if not follow_up_manager or not whatsapp_handler:
             return
 
-        logger.info("🔄 [SCHEDULER] Running process_pending_followups_job...")
+        # Get next message from queue (0 API calls)
+        message = followup_message_queue.get_next()
 
-        # Get all pending follow-ups
-        pending = follow_up_manager.get_pending_followups()
-
-        if not pending:
-            logger.info("   No pending follow-ups to send")
+        if not message:
+            # Queue is empty, nothing to do
             return
 
-        logger.info(f"   Found {len(pending)} pending follow-ups")
+        phone = message.get('phone')
+        campaign_id = message.get('campaign_id')
+        message_num = message.get('message_num')
 
-        sent_count = 0
-        error_count = 0
+        try:
+            # Get message text and campaign details
+            message_text, _ = follow_up_manager.get_next_message(phone, campaign_id)
 
-        for followup in pending:
-            try:
-                phone = followup.get('Phone', '')
-                campaign_id = followup.get('Campaign ID', '')
+            if not message_text:
+                logger.warning(f"⚠️  No message text found for {phone}, campaign {campaign_id}")
+                # Add failed update to batch
+                followup_batch_manager.add_update(
+                    phone=phone,
+                    campaign_id=campaign_id,
+                    message_num=message_num,
+                    message_text="[NO TEXT]",
+                    status='Failed',
+                    error='No message text found'
+                )
+                return
 
-                # Get next message
-                message_text, message_number = follow_up_manager.get_next_message(phone, campaign_id)
+            # Send via WhatsApp
+            logger.info(f"📤 [SCHEDULER] Sending message {message_num} to {phone}")
+            result = whatsapp_handler.send_message(to=phone, message=message_text)
 
-                if not message_text:
-                    logger.warning(f"   ⚠️  No message found for {phone}, campaign {campaign_id}")
-                    continue
+            if result.get('success'):
+                # Add successful send to batch (0 API calls)
+                followup_batch_manager.add_update(
+                    phone=phone,
+                    campaign_id=campaign_id,
+                    message_num=message_num,
+                    message_text=message_text,
+                    status='Sent'
+                )
+                logger.info(f"✅ [SCHEDULER] Sent to {phone}")
+            else:
+                # Add failed send to batch
+                error_msg = result.get('message', 'Unknown error')
+                followup_batch_manager.add_update(
+                    phone=phone,
+                    campaign_id=campaign_id,
+                    message_num=message_num,
+                    message_text=message_text,
+                    status='Failed',
+                    error=error_msg
+                )
+                logger.error(f"❌ [SCHEDULER] Failed to send to {phone}: {error_msg}")
 
-                # Send via WhatsApp
-                logger.info(f"   📤 Sending message {message_number} to {phone}")
-                result = whatsapp_handler.send_message(to=phone, message=message_text)
-
-                if result.get('success'):
-                    # Mark as sent
-                    follow_up_manager.mark_followup_sent(
-                        phone=phone,
-                        campaign_id=campaign_id,
-                        message_number=message_number,
-                        message_text=message_text
-                    )
-                    sent_count += 1
-                    logger.info(f"   ✅ Sent successfully to {phone}")
-                else:
-                    error_count += 1
-                    logger.error(f"   ❌ Failed to send to {phone}: {result.get('message')}")
-
-            except Exception as e:
-                error_count += 1
-                logger.error(f"   ❌ Error processing follow-up: {e}")
-
-        logger.info(f"✅ [SCHEDULER] Sent {sent_count} follow-ups, {error_count} errors")
+        except Exception as e:
+            logger.error(f"❌ [SCHEDULER] Error sending message to {phone}: {e}")
+            followup_batch_manager.add_update(
+                phone=phone,
+                campaign_id=campaign_id,
+                message_num=message_num,
+                message_text="[ERROR]",
+                status='Failed',
+                error=str(e)
+            )
 
     except Exception as e:
-        logger.error(f"❌ [SCHEDULER] Error in process_pending_followups_job: {e}")
+        logger.error(f"❌ [SCHEDULER] Error in throttled_send_followup_job: {e}")
+
+
+def flush_batch_updates_job():
+    """
+    MINIMAL QUOTA - Flush batch updates (every 30 minutes)
+
+    Purpose:
+    - Get all pending updates from batch manager
+    - Write to Google Sheets in bulk
+    - Update queue status and append logs
+
+    API Calls:
+    - 1 API call to batch update queue rows
+    - 1 API call to batch append log entries
+    - (Skip analytics to save 1 API call)
+
+    Total: 2 API calls per flush
+    Frequency: Every 30 minutes = 2 per hour = 4 API calls per hour
+
+    With check job: 40/hr + 4/hr = 44 API calls per hour from follow-ups
+    With enrollment: 10 API calls per 10 min = 60/hr
+    With broadcasts: ~60/hr
+    Total system: ~160+ per hour but spread evenly (no spikes)
+    """
+    try:
+        if not follow_up_manager:
+            return
+
+        logger.debug("🔄 [SCHEDULER] Running flush_batch_updates_job...")
+
+        # Get all pending updates from batch manager
+        updates = followup_batch_manager.get_pending()
+
+        if not updates:
+            logger.debug("   No pending batch updates to flush")
+            return
+
+        logger.info(f"📦 [SCHEDULER] Flushing {len(updates)} updates to Google Sheets...")
+
+        # Convert BatchUpdate objects to dicts for follow_up_manager methods
+        update_dicts = [update.to_dict() for update in updates]
+
+        # Batch update queue sheet (all 'Sent' updates)
+        sent_updates = [u for u in update_dicts if u['status'] == 'Sent']
+        if sent_updates:
+            follow_up_manager.batch_update_queue(sent_updates)
+
+        # Batch append to log sheet (all updates)
+        if update_dicts:
+            follow_up_manager.batch_append_logs(update_dicts)
+
+        # Mark as flushed in batch manager
+        followup_batch_manager.mark_flushed(len(updates))
+
+        logger.info(f"✅ [SCHEDULER] Flushed {len(updates)} updates successfully")
+
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Error in flush_batch_updates_job: {e}")
 
 
 # ============================================================================
@@ -682,6 +854,207 @@ def handle_register_member_function_call(
         }
 
 
+def detect_menu_request(message: str, keywords: list) -> bool:
+    """
+    Check if message contains menu-related keywords
+
+    Args:
+        message: User message text
+        keywords: List of keywords to check
+
+    Returns:
+        bool: True if menu keyword found
+    """
+    if not message:
+        return False
+
+    message_lower = message.lower()
+    return any(keyword.lower() in message_lower for keyword in keywords)
+
+
+def detect_language(message: str) -> str:
+    """
+    Detect if message is primarily Chinese or English
+
+    Args:
+        message: User message text
+
+    Returns:
+        str: 'chinese' or 'english'
+    """
+    if not message:
+        return 'english'
+
+    chinese_chars = sum(1 for char in message if '\u4e00' <= char <= '\u9fff')
+    total_chars = len([c for c in message if c.strip()])
+
+    if total_chars == 0:
+        return 'english'
+
+    chinese_ratio = chinese_chars / total_chars
+    return 'chinese' if chinese_ratio > 0.3 else 'english'
+
+
+
+
+def get_record_booking_function_definition():
+    """Define record_booking function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "record_booking",
+            "description": "Record a confirmed booking to the Bookings sheet when customer has filled in the booking template and you have sent the confirmation. ONLY call this function AFTER you send the booking confirmation message with all details. Extract the booking information from the customer's filled template.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Customer's name from the booking template (姓名/Name field)"
+                    },
+                    "customer_gender": {
+                        "type": "string",
+                        "description": "Customer's gender from booking template (性别/Gender field). Must be 'Male' or 'Female'. Recognize: 男/男生/Male/M/boy/man = 'Male', 女/女生/Female/F/girl/woman = 'Female'"
+                    },
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "Customer's phone number from booking template (电话/Phone field). Extract digits only."
+                    },
+                    "booking_date": {
+                        "type": "string",
+                        "description": "Date of appointment from booking template (预约日期/Date field) in YYYY-MM-DD format or original format provided"
+                    },
+                    "booking_time": {
+                        "type": "string",
+                        "description": "Time of appointment from booking template (预约时间/Time field) as provided by customer"
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service type and duration from booking template (按摩服务 & 时长 field). Example: '90分钟足部按摩', '120min body massage'"
+                    },
+                    "therapist_gender": {
+                        "type": "string",
+                        "description": "Therapist gender preference from booking template (女技师/男技师 field). Must be 'Male' or 'Female'. Recognize: 男技师/Male therapist/男师傅 = 'Male', 女技师/Female therapist/女师傅 = 'Female'"
+                    }
+                },
+                "required": ["customer_name", "customer_gender", "customer_phone", "booking_date", "booking_time", "service", "therapist_gender"]
+            }
+        }
+    }
+
+
+def handle_record_booking_function_call(function_args: dict) -> dict:
+    """Handle record_booking function call from AI"""
+    logger.info("="*80)
+    logger.info("📅 HANDLING BOOKING RECORDING FUNCTION CALL")
+    logger.info("="*80)
+
+    customer_name = function_args.get('customer_name', '')
+    customer_gender = function_args.get('customer_gender', '')
+    customer_phone = function_args.get('customer_phone', '')
+    booking_date = function_args.get('booking_date', '')
+    booking_time = function_args.get('booking_time', '')
+    service = function_args.get('service', '')
+    therapist_gender = function_args.get('therapist_gender', '')
+
+    logger.info(f"📋 Booking Details:")
+    logger.info(f"   Name: {customer_name}")
+    logger.info(f"   Gender: {customer_gender}")
+    logger.info(f"   Phone: {customer_phone}")
+    logger.info(f"   Date: {booking_date}")
+    logger.info(f"   Time: {booking_time}")
+    logger.info(f"   Service: {service}")
+    logger.info(f"   Therapist: {therapist_gender}")
+
+    if not all([customer_name, customer_gender, customer_phone, booking_date, booking_time, service, therapist_gender]):
+        logger.error("❌ Missing required booking information")
+        return {'success': False, 'message': 'Missing required booking information'}
+
+    # Parse date/time to formal format
+    from utils.date_parser import parse_booking_datetime
+    parsed = parse_booking_datetime(booking_date, booking_time)
+    if parsed['success']:
+        booking_date = parsed['date']
+        booking_time = parsed['time']
+        logger.info(f"   Parsed Date: {booking_date}")
+        logger.info(f"   Parsed Time: {booking_time}")
+
+    try:
+        if not lead_manager:
+            return {'success': False, 'message': 'Booking system not available'}
+
+        result = lead_manager.record_booking(
+            customer_name=customer_name,
+            customer_gender=customer_gender,
+            customer_phone=customer_phone,
+            booking_date=booking_date,
+            booking_time=booking_time,
+            service=service,
+            therapist_gender=therapist_gender
+        )
+
+        if result['success']:
+            logger.info(f"✅ Booking recorded: Row {result['row']}")
+            return {'success': True, 'message': f"Booking recorded in row {result['row']}", 'row': result['row']}
+        else:
+            return {'success': False, 'message': result['message']}
+
+    except Exception as e:
+        logger.error(f"❌ Exception recording booking: {str(e)}")
+        return {'success': False, 'message': f'Error: {str(e)}'}
+
+def get_search_booking_function_definition():
+    """Define search_booking function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_booking",
+            "description": "Search for existing bookings by customer phone number. Use this when customer asks about their booking, wants to check booking details, or asks 'what is my booking?'",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "Customer's phone number to search for bookings. Use the sender's phone number if customer asks about 'my booking'."
+                    }
+                },
+                "required": ["customer_phone"]
+            }
+        }
+    }
+
+
+def handle_search_booking_function_call(function_args: dict) -> dict:
+    """Handle search_booking function call from AI"""
+    logger.info("="*80)
+    logger.info("🔍 HANDLING BOOKING SEARCH FUNCTION CALL")
+    logger.info("="*80)
+
+    customer_phone = function_args.get('customer_phone', '')
+
+    logger.info(f"📞 Searching for phone: {customer_phone}")
+
+    if not customer_phone:
+        logger.error("❌ Missing customer phone number")
+        return {'success': False, 'bookings': [], 'count': 0, 'message': 'Phone number is required'}
+
+    try:
+        if not lead_manager:
+            return {'success': False, 'bookings': [], 'count': 0, 'message': 'Booking system not available'}
+
+        result = lead_manager.get_bookings(customer_phone=customer_phone)
+
+        if result['success']:
+            count = result['count']
+            logger.info(f"✅ Found {count} booking(s)")
+            return result
+        else:
+            return result
+
+    except Exception as e:
+        logger.error(f"❌ Exception: {str(e)}")
+        return {'success': False, 'bookings': [], 'count': 0, 'message': f'Error: {str(e)}'}
+
+
 def handle_escalation_function_call(
     function_args: dict,
     customer_phone: str,
@@ -847,11 +1220,6 @@ def chat():
                 }), 429  # 429 Too Many Requests
 
             logger.debug("✅ Anti-spam check passed")
-            # THROTTLE: Check rate limit before making any API calls
-            try:
-                throttle_if_busy()
-            except Exception as e:
-                logger.warning(f"Rate limiter check: {e}")
         # ===================================================================
 
         # Initialize conversation if new
@@ -1107,53 +1475,6 @@ def export_conversation():
 
 
 # ============================================================================
-# HELPER FUNCTIONS - MENU IMAGE
-# ============================================================================
-
-def should_send_menu_image(message: str, config) -> tuple:
-    """
-    Check if customer message contains menu/price keywords and return menu image info.
-
-    Args:
-        message (str): Customer's message text
-        config: Configuration object with menu_image settings
-
-    Returns:
-        tuple: (should_send: bool, image_url: str, caption: str, language: str)
-    """
-    menu_config = config.get('menu_image', {})
-
-    # Check if feature is enabled
-    if not menu_config.get('enabled', False):
-        return False, None, None, None
-
-    # Get keywords from config
-    keywords = menu_config.get('send_for_keywords', [])
-
-    # Normalize message for comparison
-    message_lower = message.lower().strip()
-
-    # Check if any keyword matches
-    for keyword in keywords:
-        if keyword.lower() in message_lower:
-            # Detect language - simple check for Chinese characters
-            is_chinese = any(ord(char) > 127 for char in message if char.isalpha() or ord(char) > 127)
-
-            if is_chinese:
-                image_url = menu_config.get('chinese_url')
-                caption = menu_config.get('caption_chinese', '')
-                language = 'chinese'
-            else:
-                image_url = menu_config.get('english_url')
-                caption = menu_config.get('caption_english', '')
-                language = 'english'
-
-            return True, image_url, caption, language
-
-    return False, None, None, None
-
-
-# ============================================================================
 # ROUTES - WHATSAPP WEBHOOK
 # ============================================================================
 
@@ -1190,18 +1511,9 @@ def whapi_webhook():
 
         webhook_data = request.get_json()
 
-        # Log webhook payload for debugging
-        logger.debug(f"🔍 Raw webhook data keys: {list(webhook_data.keys()) if webhook_data else 'None'}")
-        if webhook_data:
-            logger.debug(f"🔍 Webhook structure: {webhook_data}")
-
         # Log webhook event type
         event_type = webhook_data.get('event', {}).get('type', 'unknown')
         logger.info(f"Event type: {event_type}")
-
-        # Check for messages array
-        messages = webhook_data.get('messages', [])
-        logger.debug(f"🔍 Messages in webhook: {len(messages)}")
 
         # Skip status updates
         if event_type == 'statuses':
@@ -1294,11 +1606,6 @@ def whapi_webhook():
                 return jsonify({'success': True, 'message': 'Spam blocked'}), 200
 
             logger.debug("✅ Anti-spam check passed")
-            # THROTTLE: Check rate limit before making any API calls
-            try:
-                throttle_if_busy()
-            except Exception as e:
-                logger.warning(f"Rate limiter check: {e}")
         # ===================================================================
 
         # Create session ID for WhatsApp user
@@ -1460,6 +1767,55 @@ IMPORTANT: This customer is ALREADY a member!
                 customer_memory = None
         # ===================================================================
 
+        # ===================================================================
+        # MENU IMAGE DETECTION - Send menu image if keywords detected
+        # ===================================================================
+        menu_config = config.get('menu_image', {})
+        if menu_config.get('enabled', False) and message_type == 'text' and user_message:
+            keywords = menu_config.get('send_for_keywords', [])
+
+            if detect_menu_request(user_message, keywords):
+                logger.info("=" * 80)
+                logger.info("🖼️  MENU REQUEST DETECTED - SENDING MENU IMAGE")
+                logger.info("=" * 80)
+
+                # Detect language
+                language = detect_language(user_message)
+                logger.info(f"Detected language: {language}")
+
+                # Get appropriate menu URL
+                if language == 'chinese':
+                    menu_url = menu_config.get('chinese_url')
+                    caption = menu_config.get('caption_chinese', '')
+                else:
+                    menu_url = menu_config.get('english_url')
+                    caption = menu_config.get('caption_english', '')
+
+                # Send menu image
+                if menu_url:
+                    logger.info(f"Sending {language} menu image: {menu_url}")
+
+                    try:
+                        image_result = whatsapp_handler.send_image(
+                            to=sender,
+                            image_url=menu_url,
+                            caption=caption
+                        )
+
+                        if image_result.get('success'):
+                            logger.info("✅ Menu image sent successfully")
+                        else:
+                            logger.error(f"❌ Failed to send menu image: {image_result.get('error', 'Unknown error')}")
+
+                    except Exception as e:
+                        logger.error(f"❌ Exception sending menu image: {str(e)}")
+                        logger.exception("Full error traceback:")
+                else:
+                    logger.warning(f"Menu URL not configured for language: {language}")
+
+                logger.info("=" * 80)
+        # ===================================================================
+
         # Generate AI response WITH FUNCTION CALLING
         logger.info("Generating AI response with function calling enabled...")
         messages = conversation_manager.get_conversation_for_api(session_id)
@@ -1502,7 +1858,9 @@ INSTRUCTIONS:
         # Define available tools (escalation function + member registration)
         tools = [
             get_escalation_function_definition(),
-            get_register_member_function_definition()
+            get_register_member_function_definition(),
+            get_record_booking_function_definition(),
+            get_search_booking_function_definition()
         ]
 
         # Call AI with function calling enabled
@@ -1561,6 +1919,30 @@ INSTRUCTIONS:
                         "content": json.dumps(registration_result)
                     })
 
+                elif function_name == "record_booking":
+                    booking_result = handle_record_booking_function_call(
+                        function_args=function_args
+                    )
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(booking_result)
+                    })
+
+                elif function_name == "search_booking":
+                    search_result = handle_search_booking_function_call(
+                        function_args=function_args
+                    )
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(search_result)
+                    })
+
             # Note: AI called a function, we'll add the final response after execution
 
             # Add function results to messages for final response
@@ -1605,19 +1987,6 @@ INSTRUCTIONS:
         else:
             # For function calls, add the final response
             conversation_manager.add_message(session_id, 'assistant', assistant_message)
-
-        # ⭐ CHECK FOR MENU IMAGE REQUEST ⭐
-        # If customer asks for menu/prices, send menu image before text response
-        should_send_menu, menu_image_url, menu_caption, detected_language = should_send_menu_image(user_message, config)
-
-        if should_send_menu and menu_image_url:
-            logger.info(f"📸 Menu image request detected ({detected_language})")
-            logger.info(f"   Sending menu image: {menu_image_url[:60]}...")
-            menu_result = whatsapp_handler.send_image(sender, menu_image_url, menu_caption)
-            if menu_result['success']:
-                logger.info(f"   ✅ Menu image sent successfully (Message ID: {menu_result.get('message_id', 'N/A')})")
-            else:
-                logger.warning(f"   ⚠️  Failed to send menu image: {menu_result.get('error', 'Unknown error')}")
 
         # Send response via WhatsApp
         logger.info("Sending response to WhatsApp...")
