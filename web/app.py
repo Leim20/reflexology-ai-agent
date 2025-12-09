@@ -127,6 +127,39 @@ def build_tiered_memory(customer_memory: dict) -> str:
     return "\n".join(memory_parts)
 
 
+def detect_menu_request(message: str, keywords: list) -> bool:
+    """
+    Check if message contains menu-related keywords (case-insensitive).
+
+    Used to trigger sending the menu image on WhatsApp
+    when customers ask for menu/pricing, either by text
+    or via transcribed voice message.
+    """
+    if not message or not keywords:
+        return False
+
+    text = message.lower()
+    return any((k or "").lower() in text for k in keywords)
+
+
+def detect_language(message: str) -> str:
+    """
+    Roughly detect if message is primarily Chinese or English.
+    This is used to choose which menu image URL to send.
+    """
+    if not message:
+        return "english"
+
+    chinese_chars = sum(1 for c in message if "\u4e00" <= c <= "\u9fff")
+    total_chars = len([c for c in message if c.strip()])
+
+    if total_chars == 0:
+        return "english"
+
+    ratio = chinese_chars / total_chars
+    return "chinese" if ratio > 0.3 else "english"
+
+
 # ============================================================================
 # APPLICATION INITIALIZATION
 # ============================================================================
@@ -244,8 +277,6 @@ def init_app():
                 spreadsheet_name=spreadsheet_name
             )
             logger.info("✓ Lead Manager initialized")
-            # Delay to avoid Google Sheets API burst limit during startup
-            time.sleep(2)
 
             # Initialize Follow-up Manager (uses same credentials)
             try:
@@ -254,11 +285,9 @@ def init_app():
                     spreadsheet_name=spreadsheet_name
                 )
                 logger.info("✓ Follow-up Manager initialized")
-                time.sleep(2)  # Delay before BroadcastManager init
             except Exception as e:
                 logger.error(f"❌ Failed to initialize Follow-up Manager: {e}")
                 logger.warning("   Follow-up campaigns will be disabled")
-                time.sleep(2)  # Still delay on failure to protect BroadcastManager
                 follow_up_manager = None
 
             # Initialize Broadcast Manager (uses same credentials)
@@ -854,47 +883,6 @@ def handle_register_member_function_call(
         }
 
 
-def detect_menu_request(message: str, keywords: list) -> bool:
-    """
-    Check if message contains menu-related keywords
-
-    Args:
-        message: User message text
-        keywords: List of keywords to check
-
-    Returns:
-        bool: True if menu keyword found
-    """
-    if not message:
-        return False
-
-    message_lower = message.lower()
-    return any(keyword.lower() in message_lower for keyword in keywords)
-
-
-def detect_language(message: str) -> str:
-    """
-    Detect if message is primarily Chinese or English
-
-    Args:
-        message: User message text
-
-    Returns:
-        str: 'chinese' or 'english'
-    """
-    if not message:
-        return 'english'
-
-    chinese_chars = sum(1 for char in message if '\u4e00' <= char <= '\u9fff')
-    total_chars = len([c for c in message if c.strip()])
-
-    if total_chars == 0:
-        return 'english'
-
-    chinese_ratio = chinese_chars / total_chars
-    return 'chinese' if chinese_ratio > 0.3 else 'english'
-
-
 
 
 def get_record_booking_function_definition():
@@ -969,15 +957,6 @@ def handle_record_booking_function_call(function_args: dict) -> dict:
         logger.error("❌ Missing required booking information")
         return {'success': False, 'message': 'Missing required booking information'}
 
-    # Parse date/time to formal format
-    from utils.date_parser import parse_booking_datetime
-    parsed = parse_booking_datetime(booking_date, booking_time)
-    if parsed['success']:
-        booking_date = parsed['date']
-        booking_time = parsed['time']
-        logger.info(f"   Parsed Date: {booking_date}")
-        logger.info(f"   Parsed Time: {booking_time}")
-
     try:
         if not lead_manager:
             return {'success': False, 'message': 'Booking system not available'}
@@ -994,65 +973,13 @@ def handle_record_booking_function_call(function_args: dict) -> dict:
 
         if result['success']:
             logger.info(f"✅ Booking recorded: Row {result['row']}")
-            return {'success': True, 'message': f"Booking recorded in row {result['row']}", 'row': result['row']}
+            return {'success': True, 'message': f"Booking recorded in row {result['row']}"}
         else:
             return {'success': False, 'message': result['message']}
 
     except Exception as e:
-        logger.error(f"❌ Exception recording booking: {str(e)}")
-        return {'success': False, 'message': f'Error: {str(e)}'}
-
-def get_search_booking_function_definition():
-    """Define search_booking function for OpenAI function calling"""
-    return {
-        "type": "function",
-        "function": {
-            "name": "search_booking",
-            "description": "Search for existing bookings by customer phone number. Use this when customer asks about their booking, wants to check booking details, or asks 'what is my booking?'",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "customer_phone": {
-                        "type": "string",
-                        "description": "Customer's phone number to search for bookings. Use the sender's phone number if customer asks about 'my booking'."
-                    }
-                },
-                "required": ["customer_phone"]
-            }
-        }
-    }
-
-
-def handle_search_booking_function_call(function_args: dict) -> dict:
-    """Handle search_booking function call from AI"""
-    logger.info("="*80)
-    logger.info("🔍 HANDLING BOOKING SEARCH FUNCTION CALL")
-    logger.info("="*80)
-
-    customer_phone = function_args.get('customer_phone', '')
-
-    logger.info(f"📞 Searching for phone: {customer_phone}")
-
-    if not customer_phone:
-        logger.error("❌ Missing customer phone number")
-        return {'success': False, 'bookings': [], 'count': 0, 'message': 'Phone number is required'}
-
-    try:
-        if not lead_manager:
-            return {'success': False, 'bookings': [], 'count': 0, 'message': 'Booking system not available'}
-
-        result = lead_manager.get_bookings(customer_phone=customer_phone)
-
-        if result['success']:
-            count = result['count']
-            logger.info(f"✅ Found {count} booking(s)")
-            return result
-        else:
-            return result
-
-    except Exception as e:
         logger.error(f"❌ Exception: {str(e)}")
-        return {'success': False, 'bookings': [], 'count': 0, 'message': f'Error: {str(e)}'}
+        return {'success': False, 'message': f'Error: {str(e)}'}
 
 
 def handle_escalation_function_call(
@@ -1669,11 +1596,19 @@ IMPORTANT: This customer is ALREADY a member!
         # Process message based on type
         if message_type == 'image' and message_data.get('image'):
             logger.info("Processing image message...")
-            image_url = message_data['image']['url']
+            image_payload = message_data['image']
+
+            # Whapi may provide image location as 'url' or 'link'
+            image_url = image_payload.get('url') or image_payload.get('link')
+
+            if not image_url:
+                logger.error("Image payload missing URL/link field")
+                return jsonify({'success': True}), 200
+
             image_base64 = whatsapp_handler.download_image(image_url)
 
             if image_base64:
-                mime_type = message_data['image']['mime_type']
+                mime_type = image_payload.get('mime_type', 'image/jpeg')
                 message_content = [
                     {"type": "text", "text": user_message if user_message else "I've sent an image. Can you help?"}
                 ]
@@ -1683,12 +1618,38 @@ IMPORTANT: This customer is ALREADY a member!
                 })
                 conversation_manager.add_message(session_id, 'user', message_content)
 
-        elif message_type in ['voice', 'audio', 'ptt'] and message_data.get('voice'):
+        elif message_type in ['voice', 'audio', 'ptt']:
             logger.info("Processing voice message...")
-            audio_url = message_data['voice']['url']
+            voice_payload = message_data.get('voice')
+            if not voice_payload:
+                # Fallback: try to extract voice/audio from raw webhook payload
+                raw_msg = message_data.get('raw_message', {}) if isinstance(message_data, dict) else {}
+                voice_payload = (
+                    (raw_msg.get('voice') or raw_msg.get('audio') or raw_msg.get('ptt') or raw_msg.get('media'))
+                    if isinstance(raw_msg, dict) else None
+                )
+
+            if not voice_payload:
+                logger.warning("Voice message received but no media payload found")
+                # Graceful fallback so customer is not left without a reply
+                whatsapp_handler.send_message(
+                    to=sender,
+                    message="Sorry boss, I got your voice message but couldn't read the audio payload. Can type for me? 😊"
+                )
+                return jsonify({'success': True}), 200
+
+            audio_url = voice_payload.get('url') or voice_payload.get('link')
+            mime_type = voice_payload.get('mime_type', 'audio/mpeg')
+
+            if not audio_url:
+                logger.warning("Voice payload missing URL")
+                whatsapp_handler.send_message(
+                    to=sender,
+                    message="Sorry boss, I couldn't download your voice message. Can type for me? 😊"
+                )
+                return jsonify({'success': True}), 200
 
             # Determine extension from MIME type
-            mime_type = message_data['voice']['mime_type']
             ext = 'ogg' if 'ogg' in mime_type else 'mp3' if 'mp3' in mime_type else 'm4a'
 
             # Download audio
@@ -1697,10 +1658,19 @@ IMPORTANT: This customer is ALREADY a member!
                 try:
                     voice_result = process_voice(temp_path, ext, ai_engine)
                     transcription = voice_result['transcription']
+
+                    # Make transcribed voice available to downstream logic (e.g., menu detection)
+                    user_message = transcription
+
                     full_message = f"[Voice Message]:\n{transcription}"
                     conversation_manager.add_message(session_id, 'user', full_message)
                 except Exception as e:
                     logger.error(f"Voice processing failed: {str(e)}")
+                    # Provide a friendly fallback reply instead of silent failure
+                    whatsapp_handler.send_message(
+                        to=sender,
+                        message="Sorry boss, I couldn't process your voice message. Can type for me? 😊"
+                    )
                     return jsonify({'success': True}), 200
                 finally:
                     try:
@@ -1771,19 +1741,21 @@ IMPORTANT: This customer is ALREADY a member!
         # MENU IMAGE DETECTION - Send menu image if keywords detected
         # ===================================================================
         menu_config = config.get('menu_image', {})
-        if menu_config.get('enabled', False) and message_type == 'text' and user_message:
+        # Allow menu detection for both text and voice messages
+        # (voice gets transcribed into user_message earlier)
+        if menu_config.get('enabled', False) and user_message:
             keywords = menu_config.get('send_for_keywords', [])
 
             if detect_menu_request(user_message, keywords):
                 logger.info("=" * 80)
-                logger.info("🖼️  MENU REQUEST DETECTED - SENDING MENU IMAGE")
+                logger.info("dY-мЛ,?  MENU REQUEST DETECTED - SENDING MENU IMAGE")
                 logger.info("=" * 80)
 
-                # Detect language
+                # Detect language from message content
                 language = detect_language(user_message)
                 logger.info(f"Detected language: {language}")
 
-                # Get appropriate menu URL
+                # Pick appropriate menu URL
                 if language == 'chinese':
                     menu_url = menu_config.get('chinese_url')
                     caption = menu_config.get('caption_chinese', '')
@@ -1791,10 +1763,9 @@ IMPORTANT: This customer is ALREADY a member!
                     menu_url = menu_config.get('english_url')
                     caption = menu_config.get('caption_english', '')
 
-                # Send menu image
-                if menu_url:
+                # Send menu image via WhatsApp
+                if menu_url and whatsapp_handler:
                     logger.info(f"Sending {language} menu image: {menu_url}")
-
                     try:
                         image_result = whatsapp_handler.send_image(
                             to=sender,
@@ -1803,15 +1774,14 @@ IMPORTANT: This customer is ALREADY a member!
                         )
 
                         if image_result.get('success'):
-                            logger.info("✅ Menu image sent successfully")
+                            logger.info("ƒo. Menu image sent successfully")
                         else:
-                            logger.error(f"❌ Failed to send menu image: {image_result.get('error', 'Unknown error')}")
-
+                            logger.error(f"ƒ?O Failed to send menu image: {image_result.get('error', 'Unknown error')}")
                     except Exception as e:
-                        logger.error(f"❌ Exception sending menu image: {str(e)}")
+                        logger.error(f"ƒ?O Exception sending menu image: {str(e)}")
                         logger.exception("Full error traceback:")
                 else:
-                    logger.warning(f"Menu URL not configured for language: {language}")
+                    logger.warning(f"Menu URL not configured or WhatsApp handler missing for language: {language}")
 
                 logger.info("=" * 80)
         # ===================================================================
@@ -1859,8 +1829,7 @@ INSTRUCTIONS:
         tools = [
             get_escalation_function_definition(),
             get_register_member_function_definition(),
-            get_record_booking_function_definition(),
-            get_search_booking_function_definition()
+            get_record_booking_function_definition()
         ]
 
         # Call AI with function calling enabled
@@ -1929,18 +1898,6 @@ INSTRUCTIONS:
                         "role": "tool",
                         "name": function_name,
                         "content": json.dumps(booking_result)
-                    })
-
-                elif function_name == "search_booking":
-                    search_result = handle_search_booking_function_call(
-                        function_args=function_args
-                    )
-
-                    function_results.append({
-                        "tool_call_id": tool_call['id'],
-                        "role": "tool",
-                        "name": function_name,
-                        "content": json.dumps(search_result)
                     })
 
             # Note: AI called a function, we'll add the final response after execution

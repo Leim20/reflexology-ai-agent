@@ -22,21 +22,25 @@ class ConversationManager:
     - Automatic context window management
     """
 
-    def __init__(self, max_history_length: int = 50):
+    def __init__(self, max_history_length: int = 20, summarization_threshold: int = 3000):
         """
         Initialize Conversation Manager
 
         Args:
-            max_history_length (int): Maximum messages to keep per session (default: 50)
+            max_history_length (int): Maximum messages to keep per session (default: 20)
+            summarization_threshold (int): Token count threshold to trigger summarization (default: 3000)
         """
         logger.info("="*80)
         logger.info("INITIALIZING CONVERSATION MANAGER")
         logger.info("="*80)
 
         logger.debug(f"Max history length: {max_history_length}")
+        logger.debug(f"Summarization threshold: {summarization_threshold} tokens")
 
         self.conversations: Dict[str, List[Dict[str, Any]]] = {}
         self.max_history_length = max_history_length
+        self.summarization_threshold = summarization_threshold
+        self.conversation_summaries: Dict[str, str] = {}  # Store summaries per session
 
         logger.info("✓ Conversation Manager initialized")
         logger.info("="*80)
@@ -282,3 +286,146 @@ Total Messages: {len(messages) - 1}
         exists = session_id in self.conversations
         logger.debug(f"Session {session_id} exists: {exists}")
         return exists
+
+    def _estimate_tokens(self, text: str) -> int:
+        """
+        Estimate token count for text (roughly 1 token per 4 characters)
+
+        Args:
+            text (str): Text to estimate tokens for
+
+        Returns:
+            int: Estimated token count
+        """
+        if not text:
+            return 0
+        return len(text) // 4
+
+    def _get_conversation_tokens(self, session_id: str) -> int:
+        """
+        Estimate total tokens in conversation history
+
+        Args:
+            session_id (str): Session identifier
+
+        Returns:
+            int: Estimated total tokens
+        """
+        if session_id not in self.conversations:
+            return 0
+
+        total_chars = 0
+        for msg in self.conversations[session_id]:
+            content = msg.get('content', '')
+            if isinstance(content, str):
+                total_chars += len(content)
+            elif isinstance(content, list):
+                # Multimodal - estimate text parts only
+                for part in content:
+                    if part.get('type') == 'text':
+                        total_chars += len(part.get('text', ''))
+
+        return total_chars // 4
+
+    def summarize_if_needed(self, session_id: str, ai_engine, force: bool = False) -> bool:
+        """
+        Summarize conversation if it exceeds token threshold
+        Uses gpt-4o-mini for cost efficiency
+
+        Args:
+            session_id (str): Session identifier
+            ai_engine: AIEngine instance for generating summary
+            force (bool): Force summarization regardless of token count
+
+        Returns:
+            bool: True if summarization was performed
+        """
+        if session_id not in self.conversations:
+            return False
+
+        messages = self.conversations[session_id]
+        current_tokens = self._get_conversation_tokens(session_id)
+
+        # Check if summarization is needed
+        if not force and current_tokens < self.summarization_threshold:
+            logger.debug(f"No summarization needed: {current_tokens} tokens < {self.summarization_threshold} threshold")
+            return False
+
+        # Need at least system + 10 messages to summarize
+        if len(messages) <= 11:
+            logger.debug("Not enough messages to summarize")
+            return False
+
+        logger.info("="*60)
+        logger.info("📝 SUMMARIZING CONVERSATION")
+        logger.info("="*60)
+        logger.info(f"Current tokens: {current_tokens}")
+        logger.info(f"Messages to summarize: {len(messages) - 11}")
+
+        try:
+            # Get messages to summarize (skip system, keep last 10)
+            system_msg = messages[0]
+            messages_to_summarize = messages[1:-10]
+            recent_messages = messages[-10:]
+
+            # Build summary prompt
+            conversation_text = ""
+            for msg in messages_to_summarize:
+                role = msg.get('role', 'unknown')
+                content = msg.get('content', '')
+                if isinstance(content, str):
+                    conversation_text += f"{role}: {content[:200]}\n"
+                elif isinstance(content, list):
+                    for part in content:
+                        if part.get('type') == 'text':
+                            conversation_text += f"{role}: {part.get('text', '')[:200]}\n"
+
+            summary_prompt = f"""Summarize this conversation briefly (2-3 sentences max).
+Focus on: customer's interest, any bookings discussed, important preferences.
+
+Conversation:
+{conversation_text[:2000]}
+
+Summary:"""
+
+            # Use gpt-4o-mini for cost efficiency
+            summary_response = ai_engine.generate_response(
+                [{"role": "user", "content": summary_prompt}],
+                temperature=0.3,
+                max_tokens=150
+            )
+
+            if summary_response.get('success') and summary_response.get('content'):
+                summary_text = summary_response['content'].strip()
+
+                # Store summary
+                self.conversation_summaries[session_id] = summary_text
+
+                # Rebuild conversation: system + summary + recent messages
+                summary_message = {
+                    "role": "system",
+                    "content": f"[Previous conversation summary: {summary_text}]",
+                    "timestamp": datetime.now().isoformat()
+                }
+
+                self.conversations[session_id] = [system_msg, summary_message] + recent_messages
+
+                new_tokens = self._get_conversation_tokens(session_id)
+
+                logger.info(f"✓ Summarization complete")
+                logger.info(f"  Summary: {summary_text[:100]}...")
+                logger.info(f"  Tokens reduced: {current_tokens} → {new_tokens}")
+                logger.info("="*60)
+
+                return True
+            else:
+                logger.warning("Summarization failed - continuing without summary")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error during summarization: {e}")
+            return False
+
+    def get_summary(self, session_id: str) -> Optional[str]:
+        """Get stored summary for a session"""
+        return self.conversation_summaries.get(session_id)

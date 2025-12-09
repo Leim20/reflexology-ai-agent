@@ -22,14 +22,14 @@ class AIEngine:
     - Comprehensive debug logging
     """
 
-    def __init__(self, api_key: str, model: str = "gpt-4o", temperature: float = 0.7,
+    def __init__(self, api_key: str, model: str = "gpt-4o-mini", temperature: float = 0.7,
                  max_tokens: int = 1500):
         """
         Initialize AI Engine
 
         Args:
             api_key (str): OpenAI API key
-            model (str): Model name (default: gpt-4o)
+            model (str): Model name (default: gpt-4o-mini)
             temperature (float): Temperature for generation (default: 0.7)
             max_tokens (int): Maximum tokens in response (default: 1500)
         """
@@ -54,7 +54,8 @@ class AIEngine:
                          temperature: Optional[float] = None,
                          max_tokens: Optional[int] = None,
                          tools: Optional[List[Dict[str, Any]]] = None,
-                         tool_choice: Optional[str] = None) -> Dict[str, Any]:
+                         tool_choice: Optional[str] = None,
+                         model: Optional[str] = None) -> Dict[str, Any]:
         """
         Generate chat completion response with optional function calling
 
@@ -64,6 +65,7 @@ class AIEngine:
             max_tokens (int, optional): Override default max_tokens
             tools (List[Dict], optional): Function calling tools definitions
             tool_choice (str, optional): "auto", "none", or {"type": "function", "function": {"name": "..."}}
+            model (str, optional): Override default model (e.g., "gpt-4o-mini" for cheaper tasks)
 
         Returns:
             dict: {
@@ -79,8 +81,11 @@ class AIEngine:
         logger.info("GENERATING AI RESPONSE")
         logger.info("="*60)
 
+        # Allow model override for cost optimization (e.g., gpt-4o-mini for extraction)
+        use_model = model or self.model
+
         logger.debug(f"Messages count: {len(messages)}")
-        logger.debug(f"Model: {self.model}")
+        logger.debug(f"Model: {use_model}")
         logger.debug(f"Temperature: {temperature or self.temperature}")
         logger.debug(f"Max tokens: {max_tokens or self.max_tokens}")
 
@@ -107,7 +112,7 @@ class AIEngine:
 
             # Build API call parameters
             api_params = {
-                'model': self.model,
+                'model': use_model,
                 'messages': messages,
                 'temperature': temperature or self.temperature,
                 'max_tokens': max_tokens or self.max_tokens

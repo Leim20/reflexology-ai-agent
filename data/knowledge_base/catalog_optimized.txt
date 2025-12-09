@@ -1,0 +1,197 @@
+# ============================================================================
+# SERENITY REFLEXOLOGY (EXAMPLE CITY BRANCH) - OPTIMIZED KNOWLEDGE BASE
+# ============================================================================
+# OPTIMIZED: Removed duplicates, single-language content (AI translates)
+# Token savings: ~60% reduction from original
+# ============================================================================
+
+BUSINESS_INFO:
+Name: Serenity Reflexology (Example City Branch / Downtown)
+Phone: 03-1234 5678
+WhatsApp: Available for bookings
+Google Maps: https://g.co/kgs/czy8U83
+Hours: Daily 10:00 AM - 12:00 AM (Midnight)
+Last Call: 11:30 PM
+Open: Daily including weekends
+
+# ============================================================================
+# SERVICES & PRICING - OCTOBER 2025 MENU (ACTIVE)
+# ============================================================================
+
+## RECOMMENDED PACKAGES ⭐
+
+FOOT MASSAGE 90min ⭐ RECOMMENDED
+- Duration: 90min (Foot 60 + Back 30)
+- Technique: Acupressure (指压)
+- Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+- Price: RM189 (non-member) / RM139 (member) - 26% off
+
+BODY MASSAGE 90min ⭐ RECOMMENDED
+- Duration: 90min
+- Technique: Aromatherapy with essential oils (推拿)
+- Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+- FREE Add-on: Choose 1 (Cupping/Gua Sha/Ear Candling/Belly Candling)
+- Price: RM209 (non-member) / RM169 (member) - 19% off
+
+BODY MASSAGE 120min ⭐ RECOMMENDED
+- Duration: 120min (2 hours)
+- Technique: Aromatherapy with essential oils (推拿)
+- Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+- FREE Add-on: Choose 1 (Cupping/Gua Sha/Ear Candling/Belly Candling)
+- Price: RM278 (non-member) / RM199 (member) - 28% off
+
+## OTHER PACKAGES
+
+FOOT MASSAGE 60min
+- Duration: 60min (Foot 45 + Back 15)
+- Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+- Price: RM129 / RM99 (23% off)
+
+FOOT MASSAGE 70min
+- Duration: 70min (Foot 60 + Back 10)
+- Includes: Sea Salt, Foot Scrub, Hot Eye Mask, Hot Pack
+- Price: RM149 / RM109 (27% off)
+
+BODY MASSAGE 60min
+- Duration: 60min
+- Includes: Hot Stone, Hot Eye Mask, Foot Scrub, Sea Salt, Hot Pack
+- Price: RM149 / RM109 (27% off)
+
+## ADD-ON TREATMENTS (30min each, RM75 standalone)
+- Hot Stone / Guasha / Ear Candling / Cupping / Belly Candling
+- FREE with 90min/120min body massage (pick 1)
+
+# ============================================================================
+# ADD-ON TREATMENT DETAILS
+# ============================================================================
+
+## CUPPING (拔罐) BENEFITS:
+1. Promotes Blood Circulation (促进血液循环) - relaxes tense areas, improves shoulder/neck/back pain
+2. Relieves Muscle Stiffness (舒缓肌肉僵硬) - for people who sit/stand long, post-exercise soreness
+3. Expels Cold & Dampness (排寒祛湿) - traditional therapy, removes cold/dampness from body
+4. Boosts Metabolism (加快代谢、排风排浊) - dark marks indicate metabolic pressure
+5. Improves Sleep (提升睡眠品质) - body relaxation leads to deeper sleep
+
+Cupping Precautions (拔罐后注意):
+- Avoid wind/air-con on treatment day (避免吹风、吹冷气)
+- No cold showers immediately (不要马上洗冷水澡)
+- Reduce cold drinks (减少喝冰饮)
+- Marks fade in 3-7 days (罐印3-7天会退)
+- Avoid intense exercise (避免激烈运动)
+- Drink warm water (多喝温水)
+
+Frequency: Once a month, depends on body condition
+
+## GUA SHA (刮痧) BENEFITS:
+1. Relieves Stiffness (舒缓肩颈背僵硬) - stimulates meridians, relaxes tight muscles
+2. Promotes Circulation (促进血液循环，排出淤堵) - red marks show weak circulation areas
+3. Expels Cold & Dampness (排寒祛湿) - for those who feel cold/tired easily, headaches
+4. Boosts Immunity (加快代谢，提升免疫力) - improved circulation helps body repair
+5. Relieves Headaches & Fatigue (帮助缓解头痛、疲劳感) - good for office workers
+
+Gua Sha Notes:
+- A little painful first time (especially if blockage)
+- Red marks ("sha") are normal, fade in 3-7 days
+- Same precautions as cupping
+
+## EAR CANDLING (耳烛)
+- Gentle, relaxing massage technique
+
+## BELLY CANDLING (脐烛/肚烛)
+- Helps with bloating/gas (肚子胀气)
+- Very comfortable and relaxing
+
+## HOT STONE (热石)
+- Adds warmth and deeper relaxation
+
+# ============================================================================
+# THERAPIST & GENDER POLICY
+# ============================================================================
+
+Therapist Selection:
+- Can request by therapist number (45, 46, 55, 58, 61, 64, etc.)
+- Male or female therapists available
+- Indonesian therapists available
+- We track preferences and notes
+
+## CRITICAL GENDER POLICY:
+
+Male Therapists for Female Customers:
+✅ CAN: Foot Massage, Shoulder/Back Massage (clothes on)
+❌ CANNOT: Body/Aromatherapy Massage (requires clothing removal)
+
+Reason: Body massage requires partial clothing removal. Policy for customer comfort and cultural respect.
+
+Female Therapists: Can provide ALL services to all customers.
+
+Auto-Assignment Rules:
+- Female customer + Body massage → Auto-assign female therapist
+- Don't ask "male or female?" for female body massage → Just assign female
+- Male customer + Any service → Can choose either gender
+- Any customer + Foot/Shoulder → Can choose either gender
+
+# ============================================================================
+# MEMBERSHIP BENEFITS
+# ============================================================================
+
+Registration: FREE (need Name + Phone + Birthday)
+
+Benefits:
+1. Member Pricing: 19-28% discount on all packages
+2. Birthday Month (ONE TIME per year):
+   - FREE 1 hour massage (must purchase once first)
+   - Friends get 20% off (only when accompanying birthday member)
+3. Points System (from Nov 2025): Earn points, redeem for free services
+4. Top-Up Bonus: Extra credit when buying top-up packages
+
+Points Calculation:
+- Peak Season (Jan-Mar, Jul-Sep): 4% of service amount
+- Off-Season (Apr-Jun, Oct-Dec): 8% of service amount
+
+# ============================================================================
+# BOOKING PROCEDURES
+# ============================================================================
+
+How to Book:
+1. Contact via WhatsApp or call 03-1234 5678
+2. Provide: Date, Time, Pax, Service type, Therapist preference
+3. We confirm immediately
+
+Flexibility:
+- Same-day bookings OK (subject to availability)
+- Walk-ins welcome but booking recommended
+- Couple rooms available
+- Very flexible with time changes
+- Cancellations accepted without penalty
+
+# ============================================================================
+# COMMON Q&A (Brief Answers)
+# ============================================================================
+
+Q: Business hours?
+A: Daily 10am-12am (midnight), last call 11:30pm
+
+Q: Difference between foot and body massage?
+A: Foot (指压) = acupressure on foot reflex zones, no oil. Body (推拿) = full body with aroma oil. 90/120min body includes free add-on.
+
+Q: How often can do cupping?
+A: Once a month, depends on body condition.
+
+Q: Birthday benefit how to claim?
+A: Must purchase once first, then claim free 1 hour next visit during birthday month.
+
+# ============================================================================
+# ESCALATION CONTACTS
+# ============================================================================
+
+Branch Manager: Wei Jun
+Phone: 03-1234 5678
+WhatsApp: 60120000000
+Available: Daily 10am-10pm
+Handles: Special requests, complaints, VIP customers, policy questions
+
+Escalate when:
+- Info not in knowledge base
+- Special requests needing approval
+- Complaints or service issues
+- Customer requests manager

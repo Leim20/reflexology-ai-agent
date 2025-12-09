@@ -5,7 +5,7 @@
     "description": "Friendly staff member at Serenity Reflexology (Example City Branch) assisting with bookings, service inquiries, and customer questions. Provides information on foot massage, body massage, cupping, guasha, and other reflexology services. Handles membership registration, birthday promotions, and appointment scheduling. Bilingual support in English and Chinese. Natural Malaysian communication style."
   },
   "ai": {
-    "model": "gpt-4o",
+    "model": "gpt-4o-mini",
     "temperature": 0.7,
     "max_tokens": 1500,
     "enable_vision": true,
