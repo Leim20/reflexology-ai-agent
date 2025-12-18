@@ -78,7 +78,11 @@ class Config:
             'WHAPI_API_TOKEN': os.getenv('WHAPI_API_TOKEN'),
             'WHAPI_CHANNEL_ID': os.getenv('WHAPI_CHANNEL_ID'),
             'WEBHOOK_URL': os.getenv('WEBHOOK_URL'),
-            'FLASK_SECRET_KEY': os.getenv('FLASK_SECRET_KEY')
+            'FLASK_SECRET_KEY': os.getenv('FLASK_SECRET_KEY'),
+            'CHATWOOT_API_ACCESS_TOKEN': os.getenv('CHATWOOT_API_ACCESS_TOKEN'),
+            'CHATWOOT_BASE_URL': os.getenv('CHATWOOT_BASE_URL'),
+            'CHATWOOT_ACCOUNT_ID': os.getenv('CHATWOOT_ACCOUNT_ID'),
+            'CHATWOOT_INBOX_ID': os.getenv('CHATWOOT_INBOX_ID')
         }
 
         logger.debug("Checking environment variables:")

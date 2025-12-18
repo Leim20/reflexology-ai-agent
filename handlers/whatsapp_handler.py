@@ -223,12 +223,7 @@ class WhatsAppHandler(BasePlatformHandler):
                 'message_id': message.get('id', ''),
                 'timestamp': message.get('timestamp', ''),
                 'image': message.get('image') if msg_type == 'image' else None,
-                'voice': (
-                    message.get('voice')
-                    or message.get('audio')
-                    or message.get('ptt')
-                    or message.get('media')
-                ) if msg_type in ['voice', 'audio', 'ptt'] else None,
+                'voice': message.get('voice') if msg_type in ['voice', 'audio', 'ptt'] else None,
                 'document': message.get('document') if msg_type == 'document' else None,
                 'raw_message': message
             }

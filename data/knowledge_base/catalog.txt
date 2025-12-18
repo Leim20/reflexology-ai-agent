@@ -8,9 +8,11 @@
 CATALOG: 
 BUSINESS_INFO: 
 Business Name: Serenity Reflexology (Example City Branch / Downtown)
+Address: 12, Jalan Contoh 1, Downtown, 40000 Example City, Selangor
+地址: 12, Jalan Contoh 1, Downtown, 40000 Example City, Selangor
 Phone Number: 03-1234 5678
 WhatsApp: Available for bookings
-Google Maps: https://g.co/kgs/czy8U83
+Google Maps: https://maps.google.com
 Operating Hours: Daily 10:00 AM - 12:00 AM (Midnight)
 Last Call Session: 11:30 PM
 Open Every Day: Yes, we are open daily including weekends
@@ -399,7 +401,8 @@ THERAPIST_SERVICES:
 - Can request male or female therapists
 - Can request experienced therapists (会按的 / 有经验的)
 - Some therapists rest on certain days
-- Indonesian therapists available
+- All therapists are Indonesian (我们所有的技师都是印尼的，没有本地技师)
+- No local therapists available
 - We track customer preferences and therapist notes
 - If customer didn't like a therapist, we record and won't assign again
 
@@ -1074,6 +1077,43 @@ For special requests:
 
 For VIP/regular customers:
 "As one of our valued customers, let me have [Role] personally assist you with this..."
+
+# ============================================================================
+
+PAYMENT_METHODS:
+
+## Accepted Payment Methods (接受的付款方式)
+We accept the following payment methods:
+- Cash (现金) ✅ ACCEPTED
+- Credit Card (信用卡) ✅ ACCEPTED - Visa, Mastercard
+- Touch 'n Go / TNG (TNG电子钱包) ✅ ACCEPTED - Yes we accept TNG!
+- GrabPay ✅ ACCEPTED
+- ShopeePay ✅ ACCEPTED
+- Boost ✅ ACCEPTED
+- Online Bank Transfer (网上银行转账) ✅ ACCEPTED - DuitNow supported
+
+IMPORTANT: Touch 'n Go (TNG) IS ACCEPTED! 我们接受TNG付款！
+
+## Payment Notes
+- All payments are made at the outlet after service
+- For online transfer, please show proof of payment to staff
+- Credit card acceptance subject to terminal availability
+
+## Common Payment Q&A
+
+Q: 可以用什么方式付款？/ What payment methods do you accept?
+A: 我们接受现金、信用卡（Visa/Mastercard）、Touch 'n Go、电子钱包（GrabPay、ShopeePay、Boost）和网上银行转账。
+   We accept cash, credit cards (Visa/Mastercard), Touch 'n Go, e-wallets (GrabPay, ShopeePay, Boost), and online bank transfer.
+
+Q: 可以刷卡吗？/ Can I pay by card?
+A: 可以，我们接受Visa和Mastercard信用卡。
+   Yes, we accept Visa and Mastercard credit cards.
+
+Q: 接受TNG吗？/ Do you accept Touch 'n Go?
+A: 是的，我们接受Touch 'n Go电子钱包付款。
+   Yes, we accept Touch 'n Go eWallet payments.
+
+# ============================================================================
 
 # ============================================================================
 # MAINTENANCE NOTES:

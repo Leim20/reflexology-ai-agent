@@ -187,5 +187,10 @@
     ],
     "caption_chinese": "",
     "caption_english": ""
+  },
+  "booking_notification": {
+    "enabled": true,
+    "notify_phone": "60120000000",
+    "notify_name": "wjun (Testing)"
   }
 }

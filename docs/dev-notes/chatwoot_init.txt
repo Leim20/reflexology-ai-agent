@@ -1,0 +1,13 @@
+    # Initialize Chatwoot Handler (if configured)
+    chatwoot_token = config.get_env('CHATWOOT_API_ACCESS_TOKEN')
+    if chatwoot_token and not chatwoot_token.startswith('{{'):
+        try:
+            chatwoot_handler = ChatwootHandler()
+            logger.info("✓ Chatwoot Handler initialized")
+        except Exception as e:
+            logger.error(f"❌ Failed to initialize Chatwoot Handler: {e}")
+            logger.warning("   Chatwoot integration will be disabled")
+            chatwoot_handler = None
+    else:
+        logger.info("ℹ️ Chatwoot not configured (optional)")
+

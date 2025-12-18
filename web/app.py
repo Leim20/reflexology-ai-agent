@@ -9,6 +9,7 @@ import time
 import random
 import hashlib
 import json
+from typing import Dict
 import atexit
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, session
@@ -17,7 +18,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 # Import core modules
 from core import load_config, get_config, AIEngine, ConversationManager, ResponseValidator, AntiSpamManager, WebhookValidator
-from handlers import WhatsAppHandler, WebHandler
+from handlers import WhatsAppHandler, WebHandler, ChatwootHandler
 from handlers.tools import process_document, process_image, process_voice, create_escalation_tool
 from handlers.tools.lead_manager import LeadManager
 from handlers.tools.follow_up_manager import FollowUpManager
@@ -39,6 +40,7 @@ conversation_manager = None
 response_validator = None
 whatsapp_handler = None
 web_handler = None
+chatwoot_handler = None
 escalation_tool = None
 lead_manager = None
 follow_up_manager = None  # Follow-up campaign manager
@@ -54,6 +56,14 @@ escalated_messages = set()
 # Track processed messages to prevent duplicate responses (message_id -> timestamp)
 processed_messages = {}
 PROCESSED_MESSAGE_TIMEOUT = 300  # Keep message IDs for 5 minutes
+
+# Track processed Chatwoot messages to prevent duplicate forwards (multi-worker dedup)
+processed_chatwoot_messages = {}
+CHATWOOT_MESSAGE_TIMEOUT = 60  # Keep message IDs for 1 minute
+
+# Track menu image sends per sender to avoid rapid repeats (customer -> last_sent_timestamp)
+menu_image_cooldown = {}
+MENU_IMAGE_COOLDOWN_SECONDS = 10
 
 # ============================================================================
 # HELPER FUNCTIONS - MEMORY SYSTEM
@@ -176,7 +186,7 @@ def init_app():
     - Initialize anti-spam protection
     """
     global config, ai_engine, conversation_manager, response_validator
-    global whatsapp_handler, web_handler, escalation_tool, lead_manager, follow_up_manager, broadcast_manager
+    global whatsapp_handler, web_handler, chatwoot_handler, escalation_tool, lead_manager, follow_up_manager, broadcast_manager
     global anti_spam_manager, webhook_validator, logger, scheduler
 
     print("="*80)
@@ -249,6 +259,17 @@ def init_app():
             logger.info("✓ WhatsApp Handler initialized")
         else:
             logger.warning("WhatsApp enabled but WHAPI_API_TOKEN not configured")
+
+    
+    # Initialize Chatwoot Handler
+    chatwoot_token = config.get_env("CHATWOOT_API_ACCESS_TOKEN")
+    if chatwoot_token and not chatwoot_token.startswith("{{"):
+        try:
+            chatwoot_handler = ChatwootHandler()
+            logger.info("Chatwoot Handler initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize Chatwoot: {e}")
+            chatwoot_handler = None
 
     # Initialize Escalation Tool (if enabled)
     if config.get('escalation.enabled', False):
@@ -930,6 +951,292 @@ def get_record_booking_function_definition():
     }
 
 
+# ============================================================================
+# FUNCTION CALLING - MENU IMAGE
+# ============================================================================
+
+
+def get_send_menu_image_function_definition():
+    """Define send_menu_image function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "send_menu_image",
+            "description": "Send the latest menu image (Chinese or English) to the customer via WhatsApp. Use when customer asks for menu/price list/menu photo/价目表/菜单/最新价格/etc.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "language": {
+                        "type": "string",
+                        "enum": ["chinese", "english"],
+                        "description": "Choose which menu image to send. Default is based on customer's language (Chinese vs English)."
+                    }
+                },
+                "required": []
+            }
+        }
+    }
+
+
+def handle_send_menu_image_function_call(function_args: dict, sender: str, language_hint: str = None) -> Dict[str, str]:
+    """Handle send_menu_image function call from AI or fallback"""
+    logger.info("=" * 80)
+    logger.info("SENDING MENU IMAGE (from AI tool call)")
+    logger.info("=" * 80)
+
+    menu_config = config.get('menu_image', {})
+    if not (menu_config.get('enabled') and whatsapp_handler):
+        logger.warning("Menu image disabled or WhatsApp handler missing")
+        return {'success': False, 'message': 'Menu image not available'}
+
+    requested_language = function_args.get('language')
+
+    # Pick URL based on language or auto-detect (fallback to English)
+    if requested_language == 'chinese':
+        menu_url = menu_config.get('chinese_url')
+        caption = menu_config.get('caption_chinese', '')
+        language = 'chinese'
+    elif requested_language == 'english':
+        menu_url = menu_config.get('english_url')
+        caption = menu_config.get('caption_english', '')
+        language = 'english'
+    elif language_hint == 'chinese':
+        menu_url = menu_config.get('chinese_url')
+        caption = menu_config.get('caption_chinese', '')
+        language = 'chinese'
+    else:
+        # Auto fallback to English if not specified
+        language = 'english'
+        menu_url = menu_config.get('english_url')
+        caption = menu_config.get('caption_english', '')
+
+    if not menu_url:
+        logger.warning(f"Menu URL not configured for language: {language}")
+        return {'success': False, 'message': f'Menu URL not configured for {language}'}
+
+    # Cooldown: skip if sent within MENU_IMAGE_COOLDOWN_SECONDS
+    last_sent = menu_image_cooldown.get(sender)
+    now_ts = time.time()
+    if last_sent and (now_ts - last_sent) < MENU_IMAGE_COOLDOWN_SECONDS:
+        logger.info(f"Menu image send skipped due to cooldown ({now_ts - last_sent:.1f}s ago)")
+        return {
+            'success': True,
+            'message': 'Menu image recently sent (cooldown)',
+            'language': language,
+            'menu_url': menu_url,
+            'caption': caption
+        }
+
+    try:
+        result = whatsapp_handler.send_image(
+            to=sender,
+            image_url=menu_url,
+            caption=caption
+        )
+
+        if result.get('success'):
+            menu_image_cooldown[sender] = now_ts
+            logger.info("Menu image sent successfully via tool call")
+            return {
+                'success': True,
+                'message': 'Menu image sent',
+                'language': language,
+                'menu_url': menu_url,
+                'caption': caption
+            }
+        else:
+            err = result.get('error', 'Unknown error')
+            logger.error(f"Failed to send menu image via tool: {err}")
+            return {'success': False, 'message': err}
+    except Exception as e:
+        logger.error(f"Exception sending menu image via tool: {e}")
+        logger.exception("Full error traceback:")
+        return {'success': False, 'message': str(e)}
+
+
+def send_booking_notification(
+    customer_name: str,
+    customer_gender: str,
+    customer_phone: str,
+    booking_date: str,
+    booking_time: str,
+    service: str,
+    therapist_gender: str
+) -> bool:
+    """Send booking notification to Daniel via WhatsApp"""
+    booking_config = config.get('booking_notification', {})
+
+    if not booking_config.get('enabled', False):
+        logger.info("📵 Booking notification disabled in config")
+        return False
+
+    notify_phone = booking_config.get('notify_phone', '')
+    notify_name = booking_config.get('notify_name', 'Manager')
+
+    if not notify_phone:
+        logger.warning("⚠️ Booking notification enabled but no phone configured")
+        return False
+
+    if not whatsapp_handler:
+        logger.warning("⚠️ WhatsApp handler not available for booking notification")
+        return False
+
+    # Format notification message
+    notification_msg = f"""📅 *New Booking Received!*
+
+👤 *Customer:* {customer_name} ({customer_gender})
+📱 *Phone:* {customer_phone}
+📆 *Date:* {booking_date}
+⏰ *Time:* {booking_time}
+💆 *Service:* {service}
+👨‍⚕️ *Therapist:* {therapist_gender}
+
+_Recorded automatically by Jessica Bot_"""
+
+    try:
+        logger.info(f"📤 Sending booking notification to {notify_name} ({notify_phone})")
+        result = whatsapp_handler.send_message(to=notify_phone, message=notification_msg)
+
+        if result.get('success'):
+            logger.info(f"✅ Booking notification sent to {notify_name}")
+            return True
+        else:
+            logger.error(f"❌ Failed to send booking notification: {result.get('error')}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ Exception sending booking notification: {str(e)}")
+        return False
+
+
+def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) -> bool:
+    """
+    Automatically detect booking confirmation in AI response and record it.
+    This is a fallback when AI doesn't call record_booking() function.
+    """
+    import re
+    from datetime import datetime
+
+    # Check for booking confirmation keywords
+    confirmation_keywords = [
+        '预约注册成功', '预约成功', '您已经预约了', '已经帮您预约',
+        'booking confirmed', 'Booking recorded', '预约已记录'
+    ]
+
+    is_booking_confirmation = any(keyword in assistant_message for keyword in confirmation_keywords)
+
+    if not is_booking_confirmation:
+        return False
+
+    logger.info("="*80)
+    logger.info("🔍 AUTO-DETECT: Booking confirmation detected in AI response!")
+    logger.info("="*80)
+
+    # Parse booking details from the message
+    # Patterns for Chinese format
+    name_match = re.search(r'姓名[：:]\s*([^\n]+)', assistant_message)
+    phone_match = re.search(r'电话[：:]\s*([0-9]+)', assistant_message)
+    date_match = re.search(r'预约日期[：:]\s*([^\n]+)', assistant_message)
+    time_match = re.search(r'预约时间[：:]\s*([^\n]+)', assistant_message)
+    service_match = re.search(r'(?:按摩服务|服务)[^：:]*[：:]\s*([^\n]+)', assistant_message)
+    therapist_match = re.search(r'技师[：:]\s*([^\n]+)', assistant_message)
+    gender_match = re.search(r'性别[：:]\s*([^\n]+)', assistant_message)
+
+    customer_name = name_match.group(1).strip() if name_match else ''
+    customer_phone = phone_match.group(1).strip() if phone_match else sender_phone.replace('@s.whatsapp.net', '')
+    booking_date = date_match.group(1).strip() if date_match else ''
+    booking_time = time_match.group(1).strip() if time_match else ''
+    service = service_match.group(1).strip() if service_match else ''
+    therapist_gender = therapist_match.group(1).strip() if therapist_match else ''
+    customer_gender = gender_match.group(1).strip() if gender_match else ''
+
+    # Normalize gender
+    if '男' in customer_gender.lower() or 'male' in customer_gender.lower():
+        customer_gender = 'Male'
+    elif '女' in customer_gender.lower() or 'female' in customer_gender.lower():
+        customer_gender = 'Female'
+
+    # Normalize therapist gender
+    if '男' in therapist_gender.lower() or 'male' in therapist_gender.lower():
+        therapist_gender = 'Male'
+    elif '女' in therapist_gender.lower() or 'female' in therapist_gender.lower():
+        therapist_gender = 'Female'
+
+    # Convert date format if needed (e.g., "2025年12月6日" -> "2025-12-06")
+    date_cn_match = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', booking_date)
+    if date_cn_match:
+        year, month, day = date_cn_match.groups()
+        booking_date = f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+
+    # Convert time format if needed (e.g., "晚上8点" -> "20:00")
+    time_cn_match = re.search(r'(上午|下午|晚上|早上)?(\d{1,2})[点时](?:(\d{1,2})分?|半)?', booking_time)
+    if time_cn_match:
+        period, hour, minute = time_cn_match.groups()
+        hour = int(hour)
+        minute = int(minute) if minute else 0
+        if minute == 0 and '半' in booking_time:
+            minute = 30
+        if period in ['下午', '晚上'] and hour < 12:
+            hour += 12
+        elif period == '上午' and hour == 12:
+            hour = 0
+        booking_time = f"{hour:02d}:{minute:02d}"
+
+    logger.info(f"📋 Parsed Booking Details:")
+    logger.info(f"   Name: {customer_name}")
+    logger.info(f"   Gender: {customer_gender}")
+    logger.info(f"   Phone: {customer_phone}")
+    logger.info(f"   Date: {booking_date}")
+    logger.info(f"   Time: {booking_time}")
+    logger.info(f"   Service: {service}")
+    logger.info(f"   Therapist: {therapist_gender}")
+
+    # Validate required fields
+    if not all([customer_name, customer_phone, booking_date, booking_time, service]):
+        logger.warning("⚠️ AUTO-DETECT: Missing required booking fields, skipping auto-record")
+        return False
+
+    # Check if lead_manager is available
+    if not lead_manager:
+        logger.error("❌ AUTO-DETECT: Lead manager not available")
+        return False
+
+    try:
+        # Record the booking
+        result = lead_manager.record_booking(
+            customer_name=customer_name,
+            customer_gender=customer_gender or 'Unknown',
+            customer_phone=customer_phone,
+            booking_date=booking_date,
+            booking_time=booking_time,
+            service=service,
+            therapist_gender=therapist_gender or 'Not specified'
+        )
+
+        if result['success']:
+            logger.info(f"✅ AUTO-DETECT: Booking recorded successfully! Row {result['row']}")
+
+            # Send notification
+            send_booking_notification(
+                customer_name=customer_name,
+                customer_gender=customer_gender or 'Unknown',
+                customer_phone=customer_phone,
+                booking_date=booking_date,
+                booking_time=booking_time,
+                service=service,
+                therapist_gender=therapist_gender or 'Not specified'
+            )
+
+            return True
+        else:
+            logger.error(f"❌ AUTO-DETECT: Failed to record booking: {result['message']}")
+            return False
+
+    except Exception as e:
+        logger.error(f"❌ AUTO-DETECT: Exception recording booking: {str(e)}")
+        return False
+
+
 def handle_record_booking_function_call(function_args: dict) -> dict:
     """Handle record_booking function call from AI"""
     logger.info("="*80)
@@ -973,6 +1280,18 @@ def handle_record_booking_function_call(function_args: dict) -> dict:
 
         if result['success']:
             logger.info(f"✅ Booking recorded: Row {result['row']}")
+
+            # Send notification to Daniel
+            send_booking_notification(
+                customer_name=customer_name,
+                customer_gender=customer_gender,
+                customer_phone=customer_phone,
+                booking_date=booking_date,
+                booking_time=booking_time,
+                service=service,
+                therapist_gender=therapist_gender
+            )
+
             return {'success': True, 'message': f"Booking recorded in row {result['row']}"}
         else:
             return {'success': False, 'message': result['message']}
@@ -1402,7 +1721,63 @@ def export_conversation():
 
 
 # ============================================================================
-# ROUTES - WHATSAPP WEBHOOK
+# ROUTES - CHATWOOT WEBHOOK (API inbox callback for outbound delivery)
+# ============================================================================
+
+@app.route('/webhook/chatwoot', methods=['POST'])
+def chatwoot_webhook():
+    """Webhook endpoint to receive Chatwoot message_created callbacks (outgoing)"""
+    logger.info("=" * 80)
+    logger.info("CHATWOOT CALLBACK RECEIVED")
+    logger.info("=" * 80)
+
+    if not chatwoot_handler or not whatsapp_handler:
+        logger.error("Chatwoot or WhatsApp handler not initialized")
+        return jsonify({"success": False, "error": "Handlers not ready"}), 200
+
+    webhook_data = request.get_json(silent=True) or {}
+    if not isinstance(webhook_data, dict):
+        logger.error(f"Webhook data is not a dict: {type(webhook_data)}")
+        return jsonify({'success': False, 'error': 'Invalid webhook data format'}), 400
+
+    chatwoot_msg = chatwoot_handler.parse_chatwoot_webhook(webhook_data)
+    if not chatwoot_msg:
+        logger.info("No actionable message from Chatwoot")
+        return jsonify({"success": True, "message": "Skipped"}), 200
+
+    cw_msg_id = chatwoot_msg.get("message_id")
+    if cw_msg_id:
+        current_time = time.time()
+        old_ids = [mid for mid, ts in processed_chatwoot_messages.items() if current_time - ts > CHATWOOT_MESSAGE_TIMEOUT]
+        for old_id in old_ids:
+            del processed_chatwoot_messages[old_id]
+
+        if cw_msg_id in processed_chatwoot_messages:
+            logger.info(f"Duplicate Chatwoot message {cw_msg_id}, skipping")
+            return jsonify({"success": True, "message": "Duplicate skipped"}), 200
+
+        processed_chatwoot_messages[cw_msg_id] = current_time
+        logger.info(f"Registered Chatwoot message for dedup: {cw_msg_id}")
+
+    phone_number = chatwoot_msg["phone_number"]
+    message_to_send = chatwoot_msg["message"]
+
+    logger.info(f"Forwarding Chatwoot outgoing message to WhatsApp: {phone_number}")
+    send_result = whatsapp_handler.send_message(
+        to=f"{phone_number}@s.whatsapp.net",
+        message=message_to_send
+    )
+
+    if not send_result.get("success"):
+        logger.error(f"Failed to send WhatsApp message: {send_result.get('error')}")
+        return jsonify({"success": False, "error": send_result.get("error")}), 502
+
+    logger.info("Chatwoot message delivered to WhatsApp")
+    return jsonify({"success": True}), 200
+
+
+# ============================================================================
+# ROUTES - WHATSAPP WEBHOOK (WHAPI only)
 # ============================================================================
 
 @app.route('/webhook/whapi', methods=['POST'])
@@ -1437,9 +1812,41 @@ def whapi_webhook():
         # ===================================================================
 
         webhook_data = request.get_json()
+        
+        # DEBUG: Log what we received
+        logger.info(f"Raw webhook_data type: {type(webhook_data).__name__}")
+        logger.info(f"Raw webhook_data value: {str(webhook_data)[:500]}")
+        
+        # ===================================================================
+        # HANDLE CASE WHERE WEBHOOK DATA IS STRING INSTEAD OF DICT
+        # ===================================================================
+        if isinstance(webhook_data, str):
+            logger.warning(f"Webhook data received as string, attempting to parse: {webhook_data[:100]}...")
+            try:
+                webhook_data = json.loads(webhook_data)
+            except json.JSONDecodeError:
+                logger.error(f"Failed to parse webhook data as JSON: {webhook_data[:200]}")
+                return jsonify({'success': False, 'error': 'Invalid JSON data'}), 400
+        
+        if not isinstance(webhook_data, dict):
+            logger.error(f"Webhook data is not a dict: {type(webhook_data)}")
+            return jsonify({'success': False, 'error': 'Invalid webhook data format'}), 400
 
-        # Log webhook event type
-        event_type = webhook_data.get('event', {}).get('type', 'unknown')
+        # Chatwoot callbacks must use /webhook/chatwoot (avoid loops/duplication)
+        if chatwoot_handler and chatwoot_handler.is_chatwoot_webhook(webhook_data):
+            logger.warning("Chatwoot webhook received on /webhook/whapi - skipping")
+            return jsonify({"success": True, "message": "Chatwoot webhook skipped"}), 200
+
+        # ===================================================================
+        logger.info("WHAPI WEBHOOK DETECTED (Customer Message)")
+        
+
+        # Log webhook event type (WHAPI payloads)
+        event_data = webhook_data.get('event', {})
+        if isinstance(event_data, dict):
+            event_type = event_data.get('type', 'unknown')
+        else:
+            event_type = event_data if isinstance(event_data, str) else 'unknown'
         logger.info(f"Event type: {event_type}")
 
         # Skip status updates
@@ -1489,7 +1896,7 @@ def whapi_webhook():
 
             # Mark this message as processed
             processed_messages[message_id] = current_time
-            logger.info(f"✓ New message (ID: {message_id[:20]}...)")
+            logger.info(f"✓ New message (ID: {str(message_id)[:20]}...)")
         else:
             logger.warning("⚠️ No message ID provided - cannot check for duplicates")
         # ===================================================================
@@ -1513,6 +1920,75 @@ def whapi_webhook():
         # This is the proper way to filter bot messages at the source
         # ===================================================================
         sender_clean = sender.replace('@s.whatsapp.net', '')
+
+        # ===================================================================
+        # OPTION B: FORWARD CUSTOMER MESSAGE TO CHATWOOT
+        # ===================================================================
+        chatwoot_conversation_id = None
+        if chatwoot_handler:
+            try:
+                logger.info("Forwarding customer message to Chatwoot...")
+                
+                # Create or get contact
+                contact = chatwoot_handler.create_or_get_contact(
+                    phone_number=sender_clean,
+                    name=f"Customer {sender_clean[:4]}"
+                )
+                
+                if contact:
+                    # Create or get conversation
+                    conversation = chatwoot_handler.create_or_get_conversation(
+                        contact_id=contact.get("id"),
+                        source_id=message_id
+                    )
+                    
+                    if conversation:
+                        chatwoot_conversation_id = conversation.get("id")
+                        
+                        # Add customer message to Chatwoot
+                        # Build message content based on type
+                        if message_type == 'text':
+                            chatwoot_message = user_message
+                        else:
+                            # Handle media messages - extract URL and create descriptive message
+                            media_caption = message_data.get('text', '')
+                            
+                            if message_type == 'image' and message_data.get('image'):
+                                media_data = message_data['image']
+                                media_url = media_data.get('link') or media_data.get('url') or "[Image URL not available]"
+                                caption_part = ": " + media_caption if media_caption else ""
+                                chatwoot_message = "🖼️ Image" + caption_part + "\n" + media_url
+                                
+                            elif message_type == 'document' and message_data.get('document'):
+                                media_data = message_data['document']
+                                media_url = media_data.get('link') or media_data.get('url') or "[Document URL not available]"
+                                filename = media_data.get('filename', 'document')
+                                caption_part = ": " + media_caption if media_caption else ""
+                                chatwoot_message = "📄 Document: " + filename + caption_part + "\n" + media_url
+                                
+                            elif message_type in ['audio', 'voice', 'ptt'] and message_data.get('voice'):
+                                media_data = message_data['voice']
+                                media_url = media_data.get('link') or media_data.get('url') or "[Audio URL not available]"
+                                chatwoot_message = "🎤 Voice/Audio message\n" + media_url
+                                
+                            elif message_type == 'sticker':
+                                # Stickers might be in image field
+                                media_data = message_data.get('image', {})
+                                media_url = media_data.get('link') or media_data.get('url') or "[Sticker URL not available]"
+                                chatwoot_message = "🎨 Sticker\n" + media_url
+                            else:
+                                chatwoot_message = "[" + message_type + " message]"
+                        
+                        chatwoot_handler.add_message_to_conversation(
+                            conversation_id=chatwoot_conversation_id,
+                            message=chatwoot_message,
+                            message_type="incoming"
+                        )
+                        
+                        logger.info(f"Customer message forwarded to Chatwoot conversation {chatwoot_conversation_id}")
+            except Exception as e:
+                logger.error(f"Error forwarding to Chatwoot: {e}")
+        # ===================================================================
 
         # ===================================================================
         # ANTI-SPAM CHECK - WhatsApp Messages
@@ -1738,8 +2214,11 @@ IMPORTANT: This customer is ALREADY a member!
         # ===================================================================
 
         # ===================================================================
-        # MENU IMAGE DETECTION - Send menu image if keywords detected
+        # MENU IMAGE DETECTION FLAGS (AI-first, keyword fallback later)
         # ===================================================================
+        menu_image_sent = False
+        menu_request_detected = False
+        menu_language = "english"
         menu_config = config.get('menu_image', {})
         # Allow menu detection for both text and voice messages
         # (voice gets transcribed into user_message earlier)
@@ -1748,43 +2227,13 @@ IMPORTANT: This customer is ALREADY a member!
 
             if detect_menu_request(user_message, keywords):
                 logger.info("=" * 80)
-                logger.info("dY-мЛ,?  MENU REQUEST DETECTED - SENDING MENU IMAGE")
+                logger.info("dY-мЛ,?  MENU REQUEST DETECTED")
                 logger.info("=" * 80)
-
-                # Detect language from message content
-                language = detect_language(user_message)
-                logger.info(f"Detected language: {language}")
-
-                # Pick appropriate menu URL
-                if language == 'chinese':
-                    menu_url = menu_config.get('chinese_url')
-                    caption = menu_config.get('caption_chinese', '')
-                else:
-                    menu_url = menu_config.get('english_url')
-                    caption = menu_config.get('caption_english', '')
-
-                # Send menu image via WhatsApp
-                if menu_url and whatsapp_handler:
-                    logger.info(f"Sending {language} menu image: {menu_url}")
-                    try:
-                        image_result = whatsapp_handler.send_image(
-                            to=sender,
-                            image_url=menu_url,
-                            caption=caption
-                        )
-
-                        if image_result.get('success'):
-                            logger.info("ƒo. Menu image sent successfully")
-                        else:
-                            logger.error(f"ƒ?O Failed to send menu image: {image_result.get('error', 'Unknown error')}")
-                    except Exception as e:
-                        logger.error(f"ƒ?O Exception sending menu image: {str(e)}")
-                        logger.exception("Full error traceback:")
-                else:
-                    logger.warning(f"Menu URL not configured or WhatsApp handler missing for language: {language}")
-
-                logger.info("=" * 80)
+                menu_request_detected = True
+                menu_language = detect_language(user_message)
+                logger.info(f"Detected language: {menu_language}")
         # ===================================================================
+        # HUMAN AGENT TAKEOVER CHECK DISABLED (bot always replies)
 
         # Generate AI response WITH FUNCTION CALLING
         logger.info("Generating AI response with function calling enabled...")
@@ -1825,11 +2274,12 @@ INSTRUCTIONS:
             messages_with_memory = messages
         # ===================================================================
 
-        # Define available tools (escalation function + member registration)
+        # Define available tools (escalation + member registration + booking + menu image)
         tools = [
             get_escalation_function_definition(),
             get_register_member_function_definition(),
-            get_record_booking_function_definition()
+            get_record_booking_function_definition(),
+            get_send_menu_image_function_definition()
         ]
 
         # Call AI with function calling enabled
@@ -1888,6 +2338,45 @@ INSTRUCTIONS:
                         "content": json.dumps(registration_result)
                     })
 
+                elif function_name == "send_menu_image":
+                    menu_result = handle_send_menu_image_function_call(
+                        function_args=function_args,
+                        sender=sender,
+                        language_hint=menu_language
+                    )
+
+                    if menu_result.get('success'):
+                        menu_image_sent = True
+
+                        # Sync menu image info to Chatwoot when available and not just a cooldown skip
+                        if chatwoot_handler and chatwoot_conversation_id and menu_result.get('message') != 'Menu image recently sent (cooldown)':
+                            try:
+                                result_language = menu_result.get('language') or menu_language
+                                if result_language == 'chinese':
+                                    menu_url = menu_result.get('menu_url') or menu_config.get('chinese_url')
+                                    caption = menu_result.get('caption') or menu_config.get('caption_chinese', '')
+                                else:
+                                    menu_url = menu_result.get('menu_url') or menu_config.get('english_url')
+                                    caption = menu_result.get('caption') or menu_config.get('caption_english', '')
+
+                                if menu_url:
+                                    image_message = str(caption) + "\n\n🖼️ Menu: " + str(menu_url)
+                                    chatwoot_handler.add_message_to_conversation(
+                                        conversation_id=chatwoot_conversation_id,
+                                        message=image_message,
+                                        message_type="outgoing"
+                                    )
+                                    logger.info("Menu image info synced to Chatwoot (from tool call)")
+                            except Exception as e:
+                                logger.error(f"Error syncing menu image to Chatwoot: {e}")
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(menu_result)
+                    })
+
                 elif function_name == "record_booking":
                     booking_result = handle_record_booking_function_call(
                         function_args=function_args
@@ -1933,6 +2422,44 @@ INSTRUCTIONS:
             # No function call, use AI's text response directly
             assistant_message = ai_response['content']
 
+        # Keyword fallback: send menu image if AI didn't call the tool
+        if menu_request_detected and not menu_image_sent and menu_config.get('enabled', False):
+            logger.info("=" * 80)
+            logger.info("MENU KEYWORD FALLBACK - AI tool not used, sending menu image")
+            logger.info("=" * 80)
+
+            fallback_result = handle_send_menu_image_function_call(
+                function_args={"language": menu_language},
+                sender=sender,
+                language_hint=menu_language
+            )
+
+            if fallback_result.get('success'):
+                menu_image_sent = True
+
+                if chatwoot_handler and chatwoot_conversation_id and fallback_result.get('message') != 'Menu image recently sent (cooldown)':
+                    try:
+                        fallback_language = fallback_result.get('language') or menu_language
+                        if fallback_language == 'chinese':
+                            fallback_url = fallback_result.get('menu_url') or menu_config.get('chinese_url')
+                            fallback_caption = fallback_result.get('caption') or menu_config.get('caption_chinese', '')
+                        else:
+                            fallback_url = fallback_result.get('menu_url') or menu_config.get('english_url')
+                            fallback_caption = fallback_result.get('caption') or menu_config.get('caption_english', '')
+
+                        if fallback_url:
+                            image_message = str(fallback_caption) + "\n\n🖼️ Menu: " + str(fallback_url)
+                            chatwoot_handler.add_message_to_conversation(
+                                conversation_id=chatwoot_conversation_id,
+                                message=image_message,
+                                message_type="outgoing"
+                            )
+                            logger.info("Menu image info synced to Chatwoot (keyword fallback)")
+                    except Exception as e:
+                        logger.error(f"Error syncing menu image (fallback) to Chatwoot: {e}")
+            else:
+                logger.warning(f"Menu fallback send failed: {fallback_result.get('message')}")
+
         # Validate response
         if config.get('features.response_validation', True) and config.has_knowledge_base and assistant_message:
             validation_result = response_validator.validate(assistant_message)
@@ -1945,61 +2472,71 @@ INSTRUCTIONS:
             # For function calls, add the final response
             conversation_manager.add_message(session_id, 'assistant', assistant_message)
 
-        # Send response via WhatsApp
-        logger.info("Sending response to WhatsApp...")
-        send_result = whatsapp_handler.send_message(sender, assistant_message)
+        # Send response via Chatwoot (single outbound path)
+        if chatwoot_handler and chatwoot_conversation_id:
+            logger.info("Sending bot reply via Chatwoot (outgoing message)...")
+            chatwoot_handler.add_message_to_conversation(
+                conversation_id=chatwoot_conversation_id,
+                message=assistant_message,
+                message_type="outgoing"
+            )
+        else:
+            logger.error("No Chatwoot conversation available to send bot reply")
 
-        if send_result['success']:
-            logger.info("✅ WhatsApp message sent successfully")
+        # ⭐ AUTO-DETECT BOOKING CONFIRMATION ⭐
+        # If AI sends booking confirmation but didn't call record_booking(), auto-record it
+        if assistant_message and not tool_calls:
+            try:
+                auto_detect_and_record_booking(assistant_message, sender)
+            except Exception as e:
+                logger.error(f"Auto-detect booking error: {str(e)}")
 
-            # ⭐ AUTOMATIC LEAD TRACKING & MEMORY UPDATE ⭐
-            # Record customer data to Google Sheets and save conversation history
-            if lead_manager and config.get('lead_tracking.enabled', False):
-                try:
-                    # Get conversation history
-                    messages = conversation_manager.get_conversation_for_api(session_id)
+        # ⭐ AUTOMATIC LEAD TRACKING & MEMORY UPDATE ⭐
+        # Record customer data to Google Sheets and save conversation history
+        if lead_manager and config.get('lead_tracking.enabled', False):
+            try:
+                # Get conversation history
+                messages = conversation_manager.get_conversation_for_api(session_id)
 
-                    # Check if we have enough messages to record (avoid spam)
-                    min_messages = config.get('lead_tracking.auto_record_after_messages', 3)
+                # Check if we have enough messages to record (avoid spam)
+                min_messages = config.get('lead_tracking.auto_record_after_messages', 3)
 
-                    if len(messages) >= min_messages:
-                        logger.info("="*80)
-                        logger.info("📊 AUTOMATIC LEAD TRACKING & MEMORY UPDATE")
-                        logger.info("="*80)
+                if len(messages) >= min_messages:
+                    logger.info("="*80)
+                    logger.info("📊 AUTOMATIC LEAD TRACKING & MEMORY UPDATE")
+                    logger.info("="*80)
 
-                        # Extract customer information
-                        customer_name = message_data.get('from_name', 'Unknown')
-                        customer_phone = sender.replace('@s.whatsapp.net', '')
+                    # Extract customer information
+                    customer_name = message_data.get('from_name', 'Unknown')
+                    customer_phone = sender.replace('@s.whatsapp.net', '')
 
-                        logger.info(f"Customer: {customer_name} ({customer_phone})")
+                    logger.info(f"Customer: {customer_name} ({customer_phone})")
 
-                        # Use AI to analyze conversation and extract interest
-                        lead_info = {}
-                        if config.get('lead_tracking.use_ai_analysis', True):
-                            logger.info("Using AI to analyze conversation...")
-                            lead_info = lead_manager.extract_lead_info_from_conversation(
-                                messages=messages,
-                                customer_phone=customer_phone,
-                                ai_engine=ai_engine
-                            )
-
-                        current_interest = lead_info.get('current_interest', 'Initial contact')
-
-                        # Record to Google Sheets (Customer Record sheet)
-                        logger.info(f"Recording lead with interest: {current_interest}")
-                        result = lead_manager.record_lead(
+                    # Use AI to analyze conversation and extract interest
+                    lead_info = {}
+                    if config.get('lead_tracking.use_ai_analysis', True):
+                        logger.info("Using AI to analyze conversation...")
+                        lead_info = lead_manager.extract_lead_info_from_conversation(
+                            messages=messages,
                             customer_phone=customer_phone,
-                            customer_name=customer_name if customer_name != 'Unknown' else None,
-                            current_interest=current_interest
+                            ai_engine=ai_engine
                         )
 
-                        if result['success']:
-                            logger.info(f"✅ Lead {result['action']} successfully (Row {result['row']})")
-                            logger.info(f"   Name: {customer_name}")
-                            logger.info(f"   Phone: {customer_phone}")
-                            logger.info(f"   Interest: {current_interest}")
-                        else:
-                            logger.error(f"❌ Failed to record lead: {result['message']}")
+                    current_interest = lead_info.get('current_interest', 'Initial contact')
+
+                    # Record to Google Sheets (Customer Record sheet)
+                    logger.info(f"Recording lead with interest: {current_interest}")
+                    result = lead_manager.record_lead(
+                        customer_phone=customer_phone,
+                        customer_name=customer_name if customer_name != 'Unknown' else None,
+                        current_interest=current_interest
+                    )
+
+                    if result['success']:
+                        logger.info(f"✅ Lead {result['action']} successfully (Row {result['row']})")
+                        logger.info(f"   Name: {customer_name}")
+                        logger.info(f"   Phone: {customer_phone}")
+                        logger.info(f"   Interest: {current_interest}")
 
                         # ====================================================
                         # MEMORY UPDATE - Save conversation to history sheet
@@ -2086,16 +2623,14 @@ Summary:"""
 
                         logger.info("="*80)
 
-                    else:
-                        logger.info(f"⏭️ Skipping lead recording - only {len(messages)} messages (need {min_messages}+)")
+                else:
+                    logger.info(f"⏭️ Skipping lead recording - only {len(messages)} messages (need {min_messages}+)")
 
-                except Exception as e:
-                    logger.error(f"❌ Lead tracking error: {e}")
-                    logger.exception("Lead tracking traceback:")
-                    # Don't crash the webhook if lead tracking fails
+            except Exception as e:
+                logger.error(f"❌ Lead tracking error: {e}")
+                logger.exception("Lead tracking traceback:")
+                # Don't crash the webhook if lead tracking fails
 
-        else:
-            logger.error(f"❌ Failed to send WhatsApp message: {send_result['error']}")
 
         elapsed_time = time.time() - start_time
         logger.info(f"✅ Webhook processed in {elapsed_time:.2f}s")
@@ -2114,7 +2649,7 @@ Summary:"""
 
 
 # ============================================================================
-# ROUTES - API ENDPOINTS
+
 # ============================================================================
 
 @app.route('/api/track-outbound', methods=['POST'])
@@ -2315,3 +2850,5 @@ if __name__ == '__main__':
     logger.info("="*80)
 
     app.run(debug=True, host=host, port=port)
+
+
