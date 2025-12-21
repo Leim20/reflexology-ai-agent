@@ -7,7 +7,7 @@ import os
 import requests
 import json
 import hashlib
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, List
 from utils import get_logger
 
 logger = get_logger(__name__)
@@ -113,10 +113,96 @@ class ChatwootHandler:
         except Exception as e:
             logger.error(f"Failed to add message: {e}")
             return False
+
+    def add_message_with_attachments(
+        self,
+        conversation_id: int,
+        content: str,
+        attachments: List[Dict[str, Any]],
+        message_type: str = "incoming",
+        private: bool = False,
+    ) -> bool:
+        """
+        Post a message with file attachments to Chatwoot (multipart/form-data).
+
+        Args:
+            conversation_id: Chatwoot conversation ID
+            content: Text body (can be empty when attachment exists)
+            attachments: List of dicts containing at least {"bytes": b"..."} and filename/mime_type
+            message_type: "incoming" or "outgoing"
+            private: If True, adds as a private note
+        """
+        if not attachments:
+            return self.add_message_to_conversation(conversation_id, content, message_type=message_type, private=private)
+
+        url = f"{self.base_url}/api/v1/accounts/{self.account_id}/conversations/{conversation_id}/messages"
+
+        files = []
+        for idx, att in enumerate(attachments):
+            file_bytes = att.get("bytes")
+            if not file_bytes:
+                continue
+            filename = att.get("filename") or att.get("file_name") or f"file_{idx}"
+            mime_type = att.get("mime_type") or att.get("content_type") or "application/octet-stream"
+            files.append(
+                (
+                    "attachments[]",
+                    (filename, file_bytes, mime_type),
+                )
+            )
+
+        if not files:
+            logger.warning("No valid attachment bytes provided; falling back to content-only")
+            return self.add_message_to_conversation(conversation_id, content, message_type=message_type, private=private)
+
+        data = {
+            "content": content or "",
+            "message_type": message_type,
+            "private": str(private).lower(),
+        }
+
+        # Use only the auth header; do not force JSON content-type for multipart
+        headers = {"api_access_token": self.api_token}
+
+        try:
+            response = requests.post(url, headers=headers, data=data, files=files, timeout=30)
+            response.raise_for_status()
+            logger.debug(f"Added {message_type} message with attachments to conversation {conversation_id}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to add message with attachments: {e}")
+            return False
     
     def send_message(self, conversation_id: int, message: str):
         return self.add_message_to_conversation(conversation_id, message, message_type="outgoing", private=False)
-    
+
+    def update_message_status(self, conversation_id: int, message_id: int, status: str, external_error: str = None):
+        """
+        Update the status of a message in Chatwoot (API Inbox only)
+
+        Args:
+            conversation_id: Chatwoot conversation ID
+            message_id: Chatwoot message ID
+            status: One of "sent", "delivered", "read", "failed"
+            external_error: Error message if status is "failed"
+
+        Returns:
+            bool: True if update successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/api/v1/accounts/{self.account_id}/conversations/{conversation_id}/messages/{message_id}"
+            payload = {"status": status}
+            if external_error:
+                payload["external_error"] = external_error
+
+            response = requests.patch(url, headers=self.headers, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info(f"Updated message {message_id} status to '{status}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update message status: {e}")
+            return False
+
     def is_chatwoot_webhook(self, webhook_data: dict):
         has_event = "event" in webhook_data
         has_account = "account" in webhook_data
@@ -144,10 +230,34 @@ class ChatwootHandler:
             if message_type is None:
                 message_type = webhook_data.get("message_type")
             
-            # Get content from nested or root level
-            message_content_temp = message.get("content", "") if message else ""
-            if not message_content_temp:
-                message_content_temp = webhook_data.get("content", "")
+            # Collect attachments (may be at root, in message, or in conversation.messages[0])
+            attachments: List[Dict[str, Any]] = []
+            candidate_attachments = [
+                webhook_data.get("attachments"),
+                message.get("attachments") if isinstance(message, dict) else None,
+            ]
+            conv_messages = conversation.get("messages") if isinstance(conversation, dict) else None
+            if isinstance(conv_messages, list) and conv_messages:
+                first_msg = conv_messages[0]
+                if isinstance(first_msg, dict):
+                    candidate_attachments.append(first_msg.get("attachments"))
+
+            for candidate in candidate_attachments:
+                if isinstance(candidate, list) and candidate:
+                    attachments = candidate
+                    break
+            
+            # Get content from nested or root level (avoid str(None) == "None")
+            message_content_temp = message.get("content") if message else None
+            if message_content_temp is None:
+                message_content_temp = webhook_data.get("content")
+
+            if isinstance(message_content_temp, str):
+                message_content = message_content_temp.strip()
+            elif message_content_temp is None:
+                message_content = ""
+            else:
+                message_content = str(message_content_temp).strip()
             
             # Get sender info
             sender = message.get("sender", {}) if message else {}
@@ -155,7 +265,10 @@ class ChatwootHandler:
                 sender = webhook_data.get("sender", {})
             sender_type = sender.get("type", "unknown")
             
-            logger.info(f"DEBUG: message_type={message_type}, sender_type={sender_type}, content={str(message_content_temp)[:30]}...")
+            logger.info(
+                f"DEBUG: message_type={message_type}, sender_type={sender_type}, "
+                f"content={message_content[:30]}..., attachments={len(attachments)}"
+            )
             
             # Accept if outgoing OR from agent (type=user)
             is_outgoing = message_type in [1, "outgoing"]
@@ -178,10 +291,9 @@ class ChatwootHandler:
             contact = conversation.get("meta", {}).get("sender", {})
             phone_number = contact.get("phone_number", "").replace("+", "")
             contact_name = contact.get("name", "Customer")
-            message_content = str(message_content_temp).strip()
             
-            if not message_content:
-                logger.info("Skipping empty message")
+            if not message_content and not attachments:
+                logger.info("Skipping empty message (no content, no attachments)")
                 return None
             
             logger.info(f"   Sender Type: {sender_type}")
@@ -207,6 +319,7 @@ class ChatwootHandler:
                 "phone_number": phone_number,
                 "contact_name": contact_name,
                 "message": message_content,
+                "attachments": attachments,
                 "is_human_agent": True,
                 "raw_message": message,
                 "raw_conversation": conversation

@@ -9,9 +9,12 @@ import time
 import random
 import hashlib
 import json
+import mimetypes
 from typing import Dict
+import requests
 import atexit
 from datetime import datetime
+from urllib.parse import urlparse
 from flask import Flask, render_template, request, jsonify, session
 from werkzeug.utils import secure_filename
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -48,6 +51,7 @@ broadcast_manager = None  # Scheduled broadcast manager
 anti_spam_manager = None  # Anti-spam protection system
 webhook_validator = None  # Webhook signature verification
 logger = None
+webhook_debug_logger = None  # Dedicated logger for webhook payloads
 scheduler = None  # Background scheduler for follow-up campaigns and broadcasts
 
 # Track escalated messages to prevent spam (message_id -> timestamp)
@@ -187,7 +191,7 @@ def init_app():
     """
     global config, ai_engine, conversation_manager, response_validator
     global whatsapp_handler, web_handler, chatwoot_handler, escalation_tool, lead_manager, follow_up_manager, broadcast_manager
-    global anti_spam_manager, webhook_validator, logger, scheduler
+    global anti_spam_manager, webhook_validator, logger, webhook_debug_logger, scheduler
 
     print("="*80)
     print("INITIALIZING CHAT AGENT APPLICATION")
@@ -214,6 +218,37 @@ def init_app():
 
     setup_logging(log_dir=log_dir, log_level=log_level_int, agent_name=agent_name)
     logger = get_logger(__name__)
+    
+    # ===================================================================
+    # WEBHOOK DEBUG LOGGER - Captures full JSON payloads
+    # ===================================================================
+    import logging
+    from logging.handlers import RotatingFileHandler
+    
+    # Make webhook_debug_logger available globally
+    global webhook_debug_logger
+    webhook_debug_logger = logging.getLogger("webhook_debug")
+    webhook_debug_logger.setLevel(logging.DEBUG)
+    webhook_debug_logger.propagate = False  # Don't propagate to root logger
+    
+    # Create dedicated webhook debug log file
+    webhook_log_file = os.path.join(log_dir, f"{agent_name}_webhook_payloads_{datetime.now().strftime('%Y%m%d')}.log")
+    webhook_file_handler = RotatingFileHandler(
+        webhook_log_file,
+        maxBytes=50*1024*1024,  # 50 MB
+        backupCount=10,
+        encoding='utf-8'
+    )
+    webhook_file_handler.setLevel(logging.DEBUG)
+    webhook_formatter = logging.Formatter(
+        '%(asctime)s | %(levelname)-8s | %(message)s',
+        datefmt='%Y-%m-%d %H:%M:%S'
+    )
+    webhook_file_handler.setFormatter(webhook_formatter)
+    webhook_debug_logger.addHandler(webhook_file_handler)
+    
+    logger.info(f"✅ Webhook debug logger initialized: {webhook_log_file}")
+    # ===================================================================
 
     logger.info("="*80)
     logger.info("APPLICATION INITIALIZATION STARTING")
@@ -978,8 +1013,13 @@ def get_send_menu_image_function_definition():
     }
 
 
-def handle_send_menu_image_function_call(function_args: dict, sender: str, language_hint: str = None) -> Dict[str, str]:
-    """Handle send_menu_image function call from AI or fallback"""
+def handle_send_menu_image_function_call(
+    function_args: dict,
+    sender: str,
+    language_hint: str = None,
+    conversation_id: int = None
+) -> Dict[str, str]:
+    """Handle send_menu_image function call from AI or fallback (via Chatwoot attachments when possible)"""
     logger.info("=" * 80)
     logger.info("SENDING MENU IMAGE (from AI tool call)")
     logger.info("=" * 80)
@@ -993,26 +1033,26 @@ def handle_send_menu_image_function_call(function_args: dict, sender: str, langu
 
     # Pick URL based on language or auto-detect (fallback to English)
     if requested_language == 'chinese':
-        menu_url = menu_config.get('chinese_url')
+        menu_file_path = menu_config.get('chinese_file_path')
         caption = menu_config.get('caption_chinese', '')
         language = 'chinese'
     elif requested_language == 'english':
-        menu_url = menu_config.get('english_url')
+        menu_file_path = menu_config.get('english_file_path')
         caption = menu_config.get('caption_english', '')
         language = 'english'
     elif language_hint == 'chinese':
-        menu_url = menu_config.get('chinese_url')
+        menu_file_path = menu_config.get('chinese_file_path')
         caption = menu_config.get('caption_chinese', '')
         language = 'chinese'
     else:
         # Auto fallback to English if not specified
         language = 'english'
-        menu_url = menu_config.get('english_url')
+        menu_file_path = menu_config.get('english_file_path')
         caption = menu_config.get('caption_english', '')
 
-    if not menu_url:
-        logger.warning(f"Menu URL not configured for language: {language}")
-        return {'success': False, 'message': f'Menu URL not configured for {language}'}
+    if not menu_file_path:
+        logger.warning(f"Menu file path not configured for language: {language}")
+        return {'success': False, 'message': f'Menu file path not configured for {language}'}
 
     # Cooldown: skip if sent within MENU_IMAGE_COOLDOWN_SECONDS
     last_sent = menu_image_cooldown.get(sender)
@@ -1023,35 +1063,72 @@ def handle_send_menu_image_function_call(function_args: dict, sender: str, langu
             'success': True,
             'message': 'Menu image recently sent (cooldown)',
             'language': language,
-            'menu_url': menu_url,
             'caption': caption
         }
 
-    try:
-        result = whatsapp_handler.send_image(
-            to=sender,
-            image_url=menu_url,
-            caption=caption
-        )
+    caption = caption or ""
+    filename = f"menu_{language}.png"
+    mime_type = "image/png"
 
-        if result.get('success'):
-            menu_image_cooldown[sender] = now_ts
-            logger.info("Menu image sent successfully via tool call")
-            return {
-                'success': True,
-                'message': 'Menu image sent',
-                'language': language,
-                'menu_url': menu_url,
-                'caption': caption
-            }
-        else:
-            err = result.get('error', 'Unknown error')
-            logger.error(f"Failed to send menu image via tool: {err}")
-            return {'success': False, 'message': err}
-    except Exception as e:
-        logger.error(f"Exception sending menu image via tool: {e}")
-        logger.exception("Full error traceback:")
-        return {'success': False, 'message': str(e)}
+    image_bytes = None
+    try:
+        # Option 3: Read image bytes directly from local file
+        with open(menu_file_path, 'rb') as f:
+            image_bytes = f.read()
+        logger.info(f"Successfully read menu image from local file: {menu_file_path}")
+    except Exception as fetch_error:
+        logger.error(f"Failed to read menu image from local file: {fetch_error}")
+
+    delivered_via = None
+
+    # Preferred: send via Chatwoot attachment so the conversation shows the image bubble
+    if chatwoot_handler and conversation_id and image_bytes:
+        sent = chatwoot_handler.add_message_with_attachments(
+            conversation_id=conversation_id,
+            content=caption,
+            attachments=[{
+                "bytes": image_bytes,
+                "filename": filename,
+                "mime_type": mime_type
+            }],
+            message_type="outgoing",
+            private=False
+        )
+        if sent:
+            delivered_via = "chatwoot_attachment"
+
+    # Fallback to direct WhatsApp send if Chatwoot path is unavailable or fails
+    if not delivered_via:
+        try:
+            # For WhatsApp, construct localhost static URL
+            static_url = f"http://localhost:5002/static/menu/menu_{language}.png"
+            result = whatsapp_handler.send_image(
+                to=sender,
+                image_url=static_url,
+                caption=caption
+            )
+
+            if result.get('success'):
+                delivered_via = "whapi_direct"
+            else:
+                err = result.get('error', 'Unknown error')
+                logger.error(f"Failed to send menu image via tool: {err}")
+        except Exception as e:
+            logger.error(f"Exception sending menu image via tool: {e}")
+            logger.exception("Full error traceback:")
+
+    if delivered_via:
+        menu_image_cooldown[sender] = now_ts
+        logger.info(f"Menu image sent successfully via {delivered_via}")
+        return {
+            'success': True,
+            'message': 'Menu image sent',
+            'language': language,
+            'caption': caption,
+            'route': delivered_via
+        }
+
+    return {'success': False, 'message': 'Failed to send menu image via Chatwoot or WhatsApp'}
 
 
 def send_booking_notification(
@@ -1736,6 +1813,20 @@ def chatwoot_webhook():
         return jsonify({"success": False, "error": "Handlers not ready"}), 200
 
     webhook_data = request.get_json(silent=True) or {}
+    
+    # ===================================================================
+    # LOG FULL CHATWOOT WEBHOOK JSON PAYLOAD FOR DEBUGGING
+    # ===================================================================
+    try:
+        webhook_debug_logger.info("="*80)
+        webhook_debug_logger.info("CHATWOOT WEBHOOK - FULL JSON PAYLOAD")
+        webhook_debug_logger.info("="*80)
+        webhook_debug_logger.info(json.dumps(webhook_data, indent=2, ensure_ascii=False))
+        webhook_debug_logger.info("="*80)
+    except Exception as e:
+        logger.error(f"Failed to log Chatwoot webhook payload: {e}")
+    # ===================================================================
+    
     if not isinstance(webhook_data, dict):
         logger.error(f"Webhook data is not a dict: {type(webhook_data)}")
         return jsonify({'success': False, 'error': 'Invalid webhook data format'}), 400
@@ -1746,6 +1837,8 @@ def chatwoot_webhook():
         return jsonify({"success": True, "message": "Skipped"}), 200
 
     cw_msg_id = chatwoot_msg.get("message_id")
+    conversation_id = chatwoot_msg.get("conversation_id")
+
     if cw_msg_id:
         current_time = time.time()
         old_ids = [mid for mid, ts in processed_chatwoot_messages.items() if current_time - ts > CHATWOOT_MESSAGE_TIMEOUT]
@@ -1760,17 +1853,86 @@ def chatwoot_webhook():
         logger.info(f"Registered Chatwoot message for dedup: {cw_msg_id}")
 
     phone_number = chatwoot_msg["phone_number"]
-    message_to_send = chatwoot_msg["message"]
+    message_to_send = chatwoot_msg.get("message", "") or ""
+    attachments = chatwoot_msg.get("attachments", []) or []
+    phone_formatted = f"{phone_number}@s.whatsapp.net"
 
     logger.info(f"Forwarding Chatwoot outgoing message to WhatsApp: {phone_number}")
-    send_result = whatsapp_handler.send_message(
-        to=f"{phone_number}@s.whatsapp.net",
-        message=message_to_send
-    )
+
+    if attachments:
+        att = attachments[0]
+        att_type = att.get("file_type") or att.get("attachment_type") or att.get("file_type")
+        att_url = att.get("data_url") or att.get("file_url") or att.get("thumb_url")
+        caption = message_to_send or ""
+
+        if att_type == "image" and att_url:
+            send_result = whatsapp_handler.send_image(
+                to=phone_formatted,
+                image_url=att_url,
+                caption=caption
+            )
+        elif att_type == "file" and att_url:
+            # Handle document attachments
+            # Extract filename from URL (Chatwoot embeds it in data_url)
+            from urllib.parse import urlparse, unquote
+            filename = "document.pdf"  # Default fallback
+            try:
+                parsed_url = urlparse(att_url)
+                url_path = parsed_url.path
+                # Get last part of path and decode URL encoding
+                filename_from_url = unquote(url_path.split("/")[-1])
+                if filename_from_url and "." in filename_from_url:
+                    filename = filename_from_url
+                    logger.info(f"Extracted filename from URL: {filename}")
+            except Exception as e:
+                logger.warning(f"Could not extract filename from URL: {e}")
+                # Try attachment fields as fallback
+                filename = att.get("file_name") or att.get("name") or "document.pdf"
+            send_result = whatsapp_handler.send_document(
+                to=phone_formatted,
+                document_url=att_url,
+                caption=caption,
+                filename=filename
+            )
+        else:
+            # Fallback: send link + caption as text for unsupported types
+            body_parts = []
+            if caption:
+                body_parts.append(caption)
+            if att_url:
+                body_parts.append(att_url)
+            body = "\n".join(body_parts) if body_parts else "[Attachment]"
+            send_result = whatsapp_handler.send_message(
+                to=phone_formatted,
+                message=body
+            )
+    else:
+        send_result = whatsapp_handler.send_message(
+            to=phone_formatted,
+            message=message_to_send
+        )
 
     if not send_result.get("success"):
         logger.error(f"Failed to send WhatsApp message: {send_result.get('error')}")
+
+        # Update status to failed in Chatwoot
+        if conversation_id and cw_msg_id:
+            chatwoot_handler.update_message_status(
+                conversation_id=conversation_id,
+                message_id=cw_msg_id,
+                status="failed",
+                external_error=send_result.get("error")
+            )
+
         return jsonify({"success": False, "error": send_result.get("error")}), 502
+
+    # Update status to delivered in Chatwoot
+    if conversation_id and cw_msg_id:
+        chatwoot_handler.update_message_status(
+            conversation_id=conversation_id,
+            message_id=cw_msg_id,
+            status="delivered"
+        )
 
     logger.info("Chatwoot message delivered to WhatsApp")
     return jsonify({"success": True}), 200
@@ -1812,6 +1974,19 @@ def whapi_webhook():
         # ===================================================================
 
         webhook_data = request.get_json()
+        
+        # ===================================================================
+        # LOG FULL WHAPI WEBHOOK JSON PAYLOAD FOR DEBUGGING
+        # ===================================================================
+        try:
+            webhook_debug_logger.info("="*80)
+            webhook_debug_logger.info("WHAPI WEBHOOK - FULL JSON PAYLOAD")
+            webhook_debug_logger.info("="*80)
+            webhook_debug_logger.info(json.dumps(webhook_data, indent=2, ensure_ascii=False))
+            webhook_debug_logger.info("="*80)
+        except Exception as e:
+            logger.error(f"Failed to log Whapi webhook payload: {e}")
+        # ===================================================================
         
         # DEBUG: Log what we received
         logger.info(f"Raw webhook_data type: {type(webhook_data).__name__}")
@@ -1945,46 +2120,176 @@ def whapi_webhook():
                     if conversation:
                         chatwoot_conversation_id = conversation.get("id")
                         
-                        # Add customer message to Chatwoot
-                        # Build message content based on type
-                        if message_type == 'text':
-                            chatwoot_message = user_message
-                        else:
-                            # Handle media messages - extract URL and create descriptive message
-                            media_caption = message_data.get('text', '')
-                            
-                            if message_type == 'image' and message_data.get('image'):
-                                media_data = message_data['image']
-                                media_url = media_data.get('link') or media_data.get('url') or "[Image URL not available]"
-                                caption_part = ": " + media_caption if media_caption else ""
-                                chatwoot_message = "🖼️ Image" + caption_part + "\n" + media_url
-                                
-                            elif message_type == 'document' and message_data.get('document'):
-                                media_data = message_data['document']
-                                media_url = media_data.get('link') or media_data.get('url') or "[Document URL not available]"
-                                filename = media_data.get('filename', 'document')
-                                caption_part = ": " + media_caption if media_caption else ""
-                                chatwoot_message = "📄 Document: " + filename + caption_part + "\n" + media_url
-                                
-                            elif message_type in ['audio', 'voice', 'ptt'] and message_data.get('voice'):
-                                media_data = message_data['voice']
-                                media_url = media_data.get('link') or media_data.get('url') or "[Audio URL not available]"
-                                chatwoot_message = "🎤 Voice/Audio message\n" + media_url
-                                
-                            elif message_type == 'sticker':
-                                # Stickers might be in image field
-                                media_data = message_data.get('image', {})
-                                media_url = media_data.get('link') or media_data.get('url') or "[Sticker URL not available]"
-                                chatwoot_message = "🎨 Sticker\n" + media_url
+                        # Add customer message to Chatwoot (upload images as attachments when possible)
+                        attachments_payload = []
+                        chatwoot_message = user_message
+
+                        if message_type == 'image' and message_data.get('image'):
+                            media_data = message_data['image']
+                            media_url = media_data.get('link') or media_data.get('url')
+                            if not media_url and media_data.get('id'):
+                                media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
+                            media_caption = media_data.get('caption') or message_data.get('text', '') or user_message or ''
+
+                            file_bytes = None
+                            mime_type = media_data.get('mime_type') or 'image/jpeg'
+                            if media_url:
+                                try:
+                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
+                                    response = requests.get(media_url, headers=headers, timeout=30)
+                                    response.raise_for_status()
+                                    file_bytes = response.content
+                                    if not mime_type and response.headers.get('Content-Type'):
+                                        mime_type = response.headers.get('Content-Type')
+                                except Exception as e:
+                                    logger.error(f"Failed to download image from Whapi: {e}")
+
+                            if file_bytes:
+                                filename = media_data.get('filename') or media_data.get('id') or 'image.jpg'
+                                attachments_payload.append({
+                                    'bytes': file_bytes,
+                                    'filename': filename,
+                                    'mime_type': mime_type
+                                })
+                                chatwoot_handler.add_message_with_attachments(
+                                    conversation_id=chatwoot_conversation_id,
+                                    content=media_caption,
+                                    attachments=attachments_payload,
+                                    message_type='incoming'
+                                )
+                                logger.info('Customer image forwarded to Chatwoot with attachment upload')
                             else:
-                                chatwoot_message = "[" + message_type + " message]"
-                        
-                        chatwoot_handler.add_message_to_conversation(
-                            conversation_id=chatwoot_conversation_id,
-                            message=chatwoot_message,
-                            message_type="incoming"
-                        )
-                        
+                                media_url = media_url or '[Image URL not available]'
+                                caption_part = ': ' + media_caption if media_caption else ''
+                                chatwoot_message = 'Image' + caption_part + '\n' + media_url
+                                chatwoot_handler.add_message_to_conversation(
+                                    conversation_id=chatwoot_conversation_id,
+                                    message=chatwoot_message,
+                                    message_type='incoming'
+                                )
+                        elif message_type == 'document' and message_data.get('document'):
+                            media_data = message_data['document']
+                            media_url = media_data.get('link') or media_data.get('url')
+                            if not media_url and media_data.get('id'):
+                                media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
+                            media_caption = media_data.get('caption') or message_data.get('text', '') or user_message or ''
+
+                            file_bytes = None
+                            mime_type = media_data.get('mime_type') or 'application/octet-stream'
+                            if media_url:
+                                try:
+                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
+                                    response = requests.get(media_url, headers=headers, timeout=30)
+                                    response.raise_for_status()
+                                    file_bytes = response.content
+                                    if not mime_type and response.headers.get('Content-Type'):
+                                        mime_type = response.headers.get('Content-Type')
+                                except Exception as e:
+                                    logger.error(f"Failed to download document from Whapi: {e}")
+
+                            if file_bytes:
+                                filename = media_data.get('filename') or media_data.get('id') or 'document.pdf'
+                                attachments_payload.append({
+                                    'bytes': file_bytes,
+                                    'filename': filename,
+                                    'mime_type': mime_type
+                                })
+                                chatwoot_handler.add_message_with_attachments(
+                                    conversation_id=chatwoot_conversation_id,
+                                    content=media_caption,
+                                    attachments=attachments_payload,
+                                    message_type='incoming'
+                                )
+                                logger.info('Customer document forwarded to Chatwoot with attachment upload')
+                            else:
+                                media_url = media_url or '[Document URL not available]'
+                                filename = media_data.get('filename', 'document')
+                                caption_part = ': ' + media_caption if media_caption else ''
+                                chatwoot_message = 'Document: ' + filename + caption_part + '\n' + media_url
+                                chatwoot_handler.add_message_to_conversation(
+                                    conversation_id=chatwoot_conversation_id,
+                                    message=chatwoot_message,
+                                    message_type='incoming'
+                                )
+                        elif message_type in ['audio', 'voice', 'ptt'] and message_data.get('voice'):
+                            media_data = message_data['voice']
+                            media_url = media_data.get('link') or media_data.get('url')
+                            if not media_url and media_data.get('id'):
+                                media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
+                            media_caption = message_data.get('text', '') or user_message or ''
+
+                            file_bytes = None
+                            mime_type = media_data.get('mime_type') or 'audio/ogg'
+                            if media_url:
+                                try:
+                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
+                                    response = requests.get(media_url, headers=headers, timeout=30)
+                                    response.raise_for_status()
+                                    file_bytes = response.content
+                                    if not mime_type and response.headers.get('Content-Type'):
+                                        mime_type = response.headers.get('Content-Type')
+                                except Exception as e:
+                                    logger.error(f"Failed to download voice message from Whapi: {e}")
+
+                            if file_bytes:
+                                # Determine filename and extension from mime type
+                                if 'ogg' in mime_type:
+                                    ext = 'ogg'
+                                elif 'mp3' in mime_type:
+                                    ext = 'mp3'
+                                elif 'm4a' in mime_type or 'mp4' in mime_type:
+                                    ext = 'm4a'
+                                elif 'wav' in mime_type:
+                                    ext = 'wav'
+                                else:
+                                    ext = 'ogg'
+                                
+                                filename = media_data.get('filename') or media_data.get('id') or f'voice.{ext}'
+                                if not filename.endswith(f'.{ext}'):
+                                    filename = f'voice.{ext}'
+                                    
+                                attachments_payload.append({
+                                    'bytes': file_bytes,
+                                    'filename': filename,
+                                    'mime_type': mime_type
+                                })
+                                chatwoot_handler.add_message_with_attachments(
+                                    conversation_id=chatwoot_conversation_id,
+                                    content=media_caption if media_caption else 'Voice message',
+                                    attachments=attachments_payload,
+                                    message_type='incoming'
+                                )
+                                logger.info('Customer voice message forwarded to Chatwoot with attachment upload')
+                            else:
+                                media_url = media_url or '[Voice message URL not available]'
+                                chatwoot_message = 'Voice/Audio message\n' + media_url
+                                chatwoot_handler.add_message_to_conversation(
+                                    conversation_id=chatwoot_conversation_id,
+                                    message=chatwoot_message,
+                                    message_type='incoming'
+                                )
+                        else:
+                            # Non-image or plain text: keep previous behavior
+                            if message_type == 'text':
+                                chatwoot_message = user_message
+                            else:
+                                media_caption = message_data.get('text', '')
+
+
+
+                                if message_type == 'sticker':
+                                    media_data = message_data.get('image', {})
+                                    media_url = media_data.get('link') or media_data.get('url') or '[Sticker URL not available]'
+                                    chatwoot_message = 'Sticker\n' + media_url
+                                else:
+                                    chatwoot_message = '[' + message_type + ' message]'
+
+                            chatwoot_handler.add_message_to_conversation(
+                                conversation_id=chatwoot_conversation_id,
+                                message=chatwoot_message,
+                                message_type='incoming'
+                            )
+
                         logger.info(f"Customer message forwarded to Chatwoot conversation {chatwoot_conversation_id}")
             except Exception as e:
                 logger.error(f"Error forwarding to Chatwoot: {e}")
@@ -2074,25 +2379,63 @@ IMPORTANT: This customer is ALREADY a member!
             logger.info("Processing image message...")
             image_payload = message_data['image']
 
-            # Whapi may provide image location as 'url' or 'link'
+            # Whapi may provide image location as 'url', 'link', or 'id'
             image_url = image_payload.get('url') or image_payload.get('link')
 
+            # If no direct URL, construct from media ID (WHAPI format)
+            if not image_url and image_payload.get('id'):
+                media_id = image_payload['id']
+                image_url = f"https://gate.whapi.cloud/media/{media_id}"
+                logger.info(f"Constructed media URL from ID: {media_id}")
+
             if not image_url:
-                logger.error("Image payload missing URL/link field")
-                return jsonify({'success': True}), 200
+                logger.error("Image payload missing URL/link/id field")
+                # Still process caption as text if available
+                if user_message and user_message.strip():
+                    conversation_manager.add_message(session_id, 'user', f"[Image received - URL missing]\n{user_message}")
+                else:
+                    whatsapp_handler.send_message(
+                        to=sender,
+                        message="Sorry boss, I received your image but couldn't download it. Can you resend? 😊"
+                    )
+                    return jsonify({'success': True}), 200
 
-            image_base64 = whatsapp_handler.download_image(image_url)
+            else:
+                image_base64 = whatsapp_handler.download_image(image_url)
 
-            if image_base64:
-                mime_type = image_payload.get('mime_type', 'image/jpeg')
-                message_content = [
-                    {"type": "text", "text": user_message if user_message else "I've sent an image. Can you help?"}
-                ]
-                message_content.append({
-                    "type": "image_url",
-                    "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}
-                })
-                conversation_manager.add_message(session_id, 'user', message_content)
+                # If download failed, try using preview image from webhook
+                if not image_base64 and image_payload.get('preview'):
+                    logger.info("Full image download failed, using preview image from webhook")
+                    preview_data = image_payload['preview']
+                    # Preview is in format: "data:image/jpeg;base64,..."
+                    if preview_data.startswith('data:') and ';base64,' in preview_data:
+                        image_base64 = preview_data.split(';base64,')[1]
+                        logger.info("✓ Using preview image (low resolution)")
+
+                if image_base64:
+                    mime_type = image_payload.get('mime_type', 'image/jpeg')
+                    caption_text = user_message if user_message and user_message.strip() else "I've sent an image. Can you help?"
+                    message_content = [
+                        {"type": "text", "text": caption_text}
+                    ]
+                    message_content.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"data:{mime_type};base64,{image_base64}"}
+                    })
+                    conversation_manager.add_message(session_id, 'user', message_content)
+                    logger.info("Image message with vision added to conversation")
+                else:
+                    logger.error(f"Failed to download image from: {image_url[:100]}...")
+                    # Fallback: still process as text message if caption exists
+                    if user_message and user_message.strip():
+                        logger.info("Falling back to text-only message with caption")
+                        conversation_manager.add_message(session_id, 'user', f"[Image received but download failed]\n{user_message}")
+                    else:
+                        whatsapp_handler.send_message(
+                            to=sender,
+                            message="Sorry boss, I couldn't download your image. Can you resend or describe it? 😊"
+                        )
+                        return jsonify({'success': True}), 200
 
         elif message_type in ['voice', 'audio', 'ptt']:
             logger.info("Processing voice message...")
@@ -2153,6 +2496,130 @@ IMPORTANT: This customer is ALREADY a member!
                         os.remove(temp_path)
                     except:
                         pass
+
+        elif message_type == 'document':
+            logger.info("Processing document message...")
+            document_payload = message_data.get('document')
+
+            if not document_payload:
+                logger.warning("Document message received but no document payload found")
+                caption = user_message if user_message else "sent a document"
+                conversation_manager.add_message(session_id, 'user', f"[Document received - {caption}]")
+            else:
+                # Get document details
+                filename = document_payload.get('filename', 'document')
+                file_size = document_payload.get('file_size', 0)
+                mime_type = document_payload.get('mime_type', 'unknown')
+                document_url = document_payload.get('link') or document_payload.get('url')
+
+                logger.info(f"Document details: {filename} ({mime_type}, {file_size} bytes)")
+
+                # EDGE CASE: No download URL available
+                if not document_url:
+                    logger.warning("Document URL not available in webhook payload")
+                    caption_text = user_message if user_message.strip() else "sent a document"
+                    conversation_manager.add_message(session_id, 'user', f"[Customer sent document: {filename} - {caption_text}]")
+                else:
+                    # Import helpers locally
+                    from utils.helpers import get_file_extension, is_document_file, check_file_size, DOCUMENT_EXTENSIONS
+
+                    # Get file extension
+                    ext = get_file_extension(filename)
+
+                    # EDGE CASE: Validate document type before processing
+                    if not is_document_file(filename):
+                        logger.warning(f"Unsupported document type: {filename} (extension: {ext})")
+                        logger.warning(f"Supported types: {DOCUMENT_EXTENSIONS}")
+                        caption_text = user_message if user_message.strip() else ""
+                        fallback_message = f"[Customer sent unsupported document: {filename}]"
+                        if caption_text:
+                            fallback_message += f"\n\nCustomer's message: {caption_text}"
+                        conversation_manager.add_message(session_id, 'user', fallback_message)
+
+                        # Notify user
+                        whatsapp_handler.send_message(
+                            to=sender,
+                            message=f"Sorry, I can only process PDF, Word (.docx), and text files. Your file '{filename}' cannot be read."
+                        )
+                    else:
+                        # Create temporary file path
+                        temp_path = os.path.join('data/uploads', f"whatsapp_doc_{int(time.time())}_{session_id}.{ext}")
+
+                        logger.info(f"Downloading document to: {temp_path}")
+
+                        # Download document from Whapi
+                        download_success = whatsapp_handler.download_document(document_url, temp_path)
+
+                        if not download_success:
+                            # EDGE CASE: Download failed
+                            logger.error("Failed to download document from Whapi")
+                            caption_text = user_message if user_message.strip() else ""
+                            fallback_message = f"[Customer sent document: {filename} - download failed]"
+                            if caption_text:
+                                fallback_message += f"\n\nCustomer's message: {caption_text}"
+                            conversation_manager.add_message(session_id, 'user', fallback_message)
+                        else:
+                            try:
+                                # EDGE CASE: Check file size after download
+                                size_check = check_file_size(temp_path, filename)
+
+                                if not size_check['valid']:
+                                    logger.warning(f"File size validation failed: {size_check['error']}")
+                                    caption_text = user_message if user_message.strip() else ""
+                                    fallback_message = f"[Customer sent document: {filename} - file too large]"
+                                    if caption_text:
+                                        fallback_message += f"\n\nCustomer's message: {caption_text}"
+                                    conversation_manager.add_message(session_id, 'user', fallback_message)
+
+                                    # Notify user about file size issue
+                                    whatsapp_handler.send_message(
+                                        to=sender,
+                                        message=f"Sorry, your document '{filename}' is too large. Maximum size is 10MB."
+                                    )
+                                else:
+                                    # Extract text from document
+                                    logger.info(f"Extracting text from document: {filename}")
+                                    content = process_document(temp_path, ext)
+
+                                    # Build message with extracted content
+                                    caption_text = user_message if user_message.strip() else ""
+
+                                    if caption_text:
+                                        full_message = f"{caption_text}\n\n[Uploaded Document: {filename}]:\n{content}"
+                                    else:
+                                        full_message = f"[Uploaded Document: {filename}]:\n{content}"
+
+                                    # Add to conversation
+                                    conversation_manager.add_message(session_id, 'user', full_message)
+
+                                    logger.info(f"✓ Document processed successfully: {filename}")
+                                    logger.info(f"  Extracted content length: {len(content)} characters")
+                            except Exception as e:
+                                # EDGE CASE: Text extraction failed
+                                logger.error(f"❌ Document text extraction failed: {str(e)}")
+                                logger.exception("Full error traceback:")
+
+                                caption_text = user_message if user_message.strip() else ""
+                                fallback_message = f"[Customer sent document: {filename} - extraction failed]"
+                                if caption_text:
+                                    fallback_message += f"\n\nCustomer's message: {caption_text}"
+                                conversation_manager.add_message(session_id, 'user', fallback_message)
+
+                                # Notify user
+                                whatsapp_handler.send_message(
+                                    to=sender,
+                                    message=f"Sorry, I couldn't read the contents of '{filename}'. Please make sure it's a valid PDF, Word, or text document."
+                                )
+
+                            finally:
+                                # CRITICAL: Always cleanup temporary file
+                                try:
+                                    if os.path.exists(temp_path):
+                                        os.remove(temp_path)
+                                        logger.debug(f"Temporary document file cleaned up: {temp_path}")
+                                except Exception as cleanup_error:
+                                    logger.warning(f"Failed to cleanup temp file: {cleanup_error}")
+                                    # Don't raise - cleanup failure shouldn't break webhook
 
         else:
             # Text message
@@ -2342,33 +2809,12 @@ INSTRUCTIONS:
                     menu_result = handle_send_menu_image_function_call(
                         function_args=function_args,
                         sender=sender,
-                        language_hint=menu_language
+                        language_hint=menu_language,
+                        conversation_id=chatwoot_conversation_id
                     )
 
                     if menu_result.get('success'):
                         menu_image_sent = True
-
-                        # Sync menu image info to Chatwoot when available and not just a cooldown skip
-                        if chatwoot_handler and chatwoot_conversation_id and menu_result.get('message') != 'Menu image recently sent (cooldown)':
-                            try:
-                                result_language = menu_result.get('language') or menu_language
-                                if result_language == 'chinese':
-                                    menu_url = menu_result.get('menu_url') or menu_config.get('chinese_url')
-                                    caption = menu_result.get('caption') or menu_config.get('caption_chinese', '')
-                                else:
-                                    menu_url = menu_result.get('menu_url') or menu_config.get('english_url')
-                                    caption = menu_result.get('caption') or menu_config.get('caption_english', '')
-
-                                if menu_url:
-                                    image_message = str(caption) + "\n\n🖼️ Menu: " + str(menu_url)
-                                    chatwoot_handler.add_message_to_conversation(
-                                        conversation_id=chatwoot_conversation_id,
-                                        message=image_message,
-                                        message_type="outgoing"
-                                    )
-                                    logger.info("Menu image info synced to Chatwoot (from tool call)")
-                            except Exception as e:
-                                logger.error(f"Error syncing menu image to Chatwoot: {e}")
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],
@@ -2431,32 +2877,12 @@ INSTRUCTIONS:
             fallback_result = handle_send_menu_image_function_call(
                 function_args={"language": menu_language},
                 sender=sender,
-                language_hint=menu_language
+                language_hint=menu_language,
+                conversation_id=chatwoot_conversation_id
             )
 
             if fallback_result.get('success'):
                 menu_image_sent = True
-
-                if chatwoot_handler and chatwoot_conversation_id and fallback_result.get('message') != 'Menu image recently sent (cooldown)':
-                    try:
-                        fallback_language = fallback_result.get('language') or menu_language
-                        if fallback_language == 'chinese':
-                            fallback_url = fallback_result.get('menu_url') or menu_config.get('chinese_url')
-                            fallback_caption = fallback_result.get('caption') or menu_config.get('caption_chinese', '')
-                        else:
-                            fallback_url = fallback_result.get('menu_url') or menu_config.get('english_url')
-                            fallback_caption = fallback_result.get('caption') or menu_config.get('caption_english', '')
-
-                        if fallback_url:
-                            image_message = str(fallback_caption) + "\n\n🖼️ Menu: " + str(fallback_url)
-                            chatwoot_handler.add_message_to_conversation(
-                                conversation_id=chatwoot_conversation_id,
-                                message=image_message,
-                                message_type="outgoing"
-                            )
-                            logger.info("Menu image info synced to Chatwoot (keyword fallback)")
-                    except Exception as e:
-                        logger.error(f"Error syncing menu image (fallback) to Chatwoot: {e}")
             else:
                 logger.warning(f"Menu fallback send failed: {fallback_result.get('message')}")
 
@@ -2850,5 +3276,3 @@ if __name__ == '__main__':
     logger.info("="*80)
 
     app.run(debug=True, host=host, port=port)
-
-

@@ -107,22 +107,33 @@
     "follow_up_system": {
       "enabled": true,
       "description": "Auto follow-up campaigns for leads (includes campaigns, queue, sent log, analytics). Saves 2 API reads per message when disabled.",
-      "sheets": ["follow_up_campaigns", "follow_up_queue", "follow_up_sent_log", "follow_up_analytics"]
+      "sheets": [
+        "follow_up_campaigns",
+        "follow_up_queue",
+        "follow_up_sent_log",
+        "follow_up_analytics"
+      ]
     },
     "membership_system": {
       "enabled": true,
       "description": "Member registration and loyalty points system. Saves 1 API read per 5 minutes when disabled.",
-      "sheets": ["members"]
+      "sheets": [
+        "members"
+      ]
     },
     "conversation_history": {
       "enabled": true,
       "description": "Store and retrieve customer conversation history. Saves 1 API read per message when disabled.",
-      "sheets": ["conversation_history"]
+      "sheets": [
+        "conversation_history"
+      ]
     },
     "lead_tracking": {
       "enabled": true,
       "description": "Track customer leads and interactions. Saves 1 API read per message when disabled.",
-      "sheets": ["customer_record"]
+      "sheets": [
+        "customer_record"
+      ]
     }
   },
   "memory": {
@@ -168,8 +179,6 @@
   },
   "menu_image": {
     "enabled": true,
-    "chinese_url": "https://i.im.ge/2025/12/01/4PYfgr.SERENITY-MenU-Chinese-29-Oct-pdf.png",
-    "english_url": "https://i.im.ge/2025/12/01/4Pb39a.SERENITY-Menu-29-Oct-pdf.png",
     "send_for_keywords": [
       "所有menu",
       "所有价格",
@@ -186,11 +195,8 @@
       "价目表"
     ],
     "caption_chinese": "",
-    "caption_english": ""
-  },
-  "booking_notification": {
-    "enabled": true,
-    "notify_phone": "60120000000",
-    "notify_name": "wjun (Testing)"
+    "caption_english": "",
+    "chinese_file_path": "/root/reflexology-agent(token-optimized)/web/static/menu/menu_chinese.png",
+    "english_file_path": "/root/reflexology-agent(token-optimized)/web/static/menu/menu_english.png"
   }
 }

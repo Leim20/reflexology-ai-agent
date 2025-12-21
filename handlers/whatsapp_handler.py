@@ -206,18 +206,38 @@ class WhatsAppHandler(BasePlatformHandler):
                 # Continue with message processing if config not available
 
             # Message passed all filters - extract and return the message data
-            # WHAPI format: message['text'] = {'body': 'actual message text'}
+            # WHAPI format:
+            # - text: message['text'] = {'body': '...'} (text messages)
+            # - media caption: message['image'|'video'|'document']['caption'] (media messages)
             text_data = message.get('text', {})
             if isinstance(text_data, dict):
                 message_text = text_data.get('body', '')
             else:
                 message_text = str(text_data) if text_data else ''
 
+            # For media messages, captions are usually inside the media object
+            if not message_text:
+                # Some providers also put caption at top-level
+                top_caption = message.get('caption', '')
+                if isinstance(top_caption, str) and top_caption.strip():
+                    message_text = top_caption.strip()
+                elif msg_type == 'image' and isinstance(message.get('image'), dict):
+                    message_text = message['image'].get('caption', '') or ''
+                elif msg_type == 'video' and isinstance(message.get('video'), dict):
+                    message_text = message['video'].get('caption', '') or ''
+                elif msg_type == 'document' and isinstance(message.get('document'), dict):
+                    message_text = message['document'].get('caption', '') or ''
+                elif msg_type in ['audio', 'voice', 'ptt']:
+                    media_obj = message.get('voice') or message.get('audio') or message.get('ptt')
+                    if isinstance(media_obj, dict):
+                        message_text = media_obj.get('caption', '') or ''
+
             logger.info(f"✅ MESSAGE ACCEPTED: Processing message from {sender_phone}")
             logger.debug(f"   Message text: {message_text[:100]}..." if message_text else "   Message text: EMPTY")
 
             return {
                 'from': sender_phone,
+                'from_name': message.get('from_name'),
                 'message': message_text,
                 'type': msg_type,
                 'message_id': message.get('id', ''),
@@ -321,6 +341,105 @@ class WhatsAppHandler(BasePlatformHandler):
 
         except Exception as e:
             logger.error("❌ Failed to send WhatsApp image")
+            logger.error(f"Error: {str(e)}")
+            logger.exception("Full error traceback:")
+            logger.error("="*60)
+
+            return {
+                'success': False,
+                'error': str(e),
+                'message_id': None
+            }
+
+    def send_document(self, to: str, document_url: str, caption: str = "", filename: str = "document.pdf") -> Dict[str, Any]:
+        """
+        Send a document via WhatsApp using Whapi API
+
+        Args:
+            to (str): Recipient phone number
+            document_url (str): URL of the document to send
+            caption (str, optional): Caption text to display with document
+            filename (str, optional): Filename for the document
+
+        Returns:
+            dict: {'success': bool, 'error': str or None, 'message_id': str or None}
+        """
+        logger.info("="*60)
+        logger.info("SENDING WHATSAPP DOCUMENT")
+        logger.info("="*60)
+
+        logger.debug(f"To (raw): {to}")
+        logger.debug(f"Document URL: {document_url}")
+        logger.debug(f"Filename: {filename}")
+        logger.debug(f"Caption: {caption[:100]}..." if caption else "No caption")
+
+        # Format phone number for WHAPI (must include @s.whatsapp.net suffix)
+        formatted_to = self.format_phone_number(to)
+        logger.debug(f"To (formatted): {formatted_to}")
+
+        url = f"{self.base_url}/messages/document"
+
+        headers = {
+            'Authorization': f'Bearer {self.api_token}',
+            'Content-Type': 'application/json'
+        }
+
+        payload = {
+            'to': formatted_to,
+            'media': document_url,
+            'filename': filename
+        }
+
+        if caption:
+            payload['caption'] = caption
+
+        try:
+            logger.debug(f"Calling Whapi API: {url}")
+            response = requests.post(url, json=payload, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            response_data = response.json()
+            message_id = response_data.get('id', None)
+
+            logger.info("✓ Document sent successfully")
+            logger.info(f"  Message ID: {message_id}")
+            logger.info("="*60)
+
+            return {
+                'success': True,
+                'error': None,
+                'message_id': message_id,
+                'data': response_data
+            }
+
+        except requests.exceptions.HTTPError as http_err:
+            status_code = http_err.response.status_code if http_err.response else None
+            response_text = http_err.response.text if http_err.response else ''
+
+            if status_code == 401:
+                error_msg = "Unauthorized: check WHAPI_API_TOKEN"
+            elif status_code == 402:
+                error_msg = "Payment required: please check Whapi plan or balance"
+            elif status_code == 403:
+                error_msg = "Forbidden: check Whapi channel permissions or region"
+            elif status_code == 429:
+                error_msg = "Too many requests: Whapi rate limit reached, retry later"
+            else:
+                error_msg = f"HTTP {status_code}: {response_text}" if status_code else str(http_err)
+
+            logger.error("❌ Failed to send WhatsApp document")
+            logger.error(f"HTTPError: {error_msg}")
+            logger.exception("Full error traceback:")
+            logger.error("="*60)
+
+            return {
+                'success': False,
+                'error': error_msg,
+                'message_id': None
+            }
+
+        except Exception as e:
+            logger.error("❌ Failed to send WhatsApp document")
             logger.error(f"Error: {str(e)}")
             logger.exception("Full error traceback:")
             logger.error("="*60)
@@ -498,6 +617,43 @@ class WhatsAppHandler(BasePlatformHandler):
 
         except Exception as e:
             logger.error(f"❌ Failed to download audio: {str(e)}")
+            logger.exception("Full error traceback:")
+            return False
+
+    def download_document(self, document_url: str, save_path: str) -> bool:
+        """
+        Download document file from Whapi and save to disk
+
+        Args:
+            document_url (str): URL to the document file from Whapi
+            save_path (str): Path where to save the document file
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info(f"Downloading document from Whapi")
+        logger.debug(f"URL: {document_url[:50]}...")
+        logger.debug(f"Save path: {save_path}")
+
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.api_token}'
+            }
+
+            response = requests.get(document_url, headers=headers, timeout=30)
+            response.raise_for_status()
+
+            # Save document file to disk
+            with open(save_path, 'wb') as doc_file:
+                doc_file.write(response.content)
+
+            file_size_mb = len(response.content) / (1024 * 1024)
+
+            logger.info(f"✓ Document downloaded and saved ({file_size_mb:.2f} MB)")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to download document: {str(e)}")
             logger.exception("Full error traceback:")
             return False
 
