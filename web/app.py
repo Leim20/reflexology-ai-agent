@@ -10,7 +10,7 @@ import random
 import hashlib
 import json
 import mimetypes
-from typing import Dict
+from typing import Dict, Optional
 import requests
 import atexit
 from datetime import datetime
@@ -1871,31 +1871,8 @@ def chatwoot_webhook():
                 image_url=att_url,
                 caption=caption
             )
-        elif att_type == "file" and att_url:
-            # Handle document attachments
-            # Extract filename from URL (Chatwoot embeds it in data_url)
-            from urllib.parse import urlparse, unquote
-            filename = "document.pdf"  # Default fallback
-            try:
-                parsed_url = urlparse(att_url)
-                url_path = parsed_url.path
-                # Get last part of path and decode URL encoding
-                filename_from_url = unquote(url_path.split("/")[-1])
-                if filename_from_url and "." in filename_from_url:
-                    filename = filename_from_url
-                    logger.info(f"Extracted filename from URL: {filename}")
-            except Exception as e:
-                logger.warning(f"Could not extract filename from URL: {e}")
-                # Try attachment fields as fallback
-                filename = att.get("file_name") or att.get("name") or "document.pdf"
-            send_result = whatsapp_handler.send_document(
-                to=phone_formatted,
-                document_url=att_url,
-                caption=caption,
-                filename=filename
-            )
         else:
-            # Fallback: send link + caption as text for unsupported types
+            # Fallback: send link + caption as text so customer at least sees the attachment link
             body_parts = []
             if caption:
                 body_parts.append(caption)
@@ -2120,174 +2097,148 @@ def whapi_webhook():
                     if conversation:
                         chatwoot_conversation_id = conversation.get("id")
                         
-                        # Add customer message to Chatwoot (upload images as attachments when possible)
-                        attachments_payload = []
-                        chatwoot_message = user_message
+                        # Add customer message to Chatwoot (prefer real attachments so they display as files)
+                        chatwoot_message: Optional[str] = user_message
 
-                        if message_type == 'image' and message_data.get('image'):
-                            media_data = message_data['image']
-                            media_url = media_data.get('link') or media_data.get('url')
-                            if not media_url and media_data.get('id'):
+                        def _download_bytes(url: str) -> Optional[bytes]:
+                            if not url:
+                                return None
+                            try:
+                                headers = {"Authorization": f"Bearer {whatsapp_handler.api_token}"}
+                                response = requests.get(url, headers=headers, timeout=60)
+                                response.raise_for_status()
+                                return response.content
+                            except Exception as e:
+                                logger.error(f"Failed to download media from Whapi: {e}")
+                                return None
+
+                        def _upload_attachment(
+                            url: str,
+                            filename: str,
+                            mime_type: str,
+                            caption: str,
+                        ) -> bool:
+                            file_bytes = _download_bytes(url)
+                            if not file_bytes:
+                                return False
+                            return chatwoot_handler.add_message_with_attachments(
+                                conversation_id=chatwoot_conversation_id,
+                                content=caption or "",
+                                attachments=[{
+                                    "bytes": file_bytes,
+                                    "filename": filename,
+                                    "mime_type": mime_type or "application/octet-stream",
+                                }],
+                                message_type="incoming",
+                                private=False,
+                            )
+
+                        if message_type == "image" and message_data.get("image"):
+                            media_data = message_data["image"]
+                            media_url = media_data.get("link") or media_data.get("url")
+                            if not media_url and media_data.get("id"):
                                 media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
-                            media_caption = media_data.get('caption') or message_data.get('text', '') or user_message or ''
 
-                            file_bytes = None
-                            mime_type = media_data.get('mime_type') or 'image/jpeg'
-                            if media_url:
-                                try:
-                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
-                                    response = requests.get(media_url, headers=headers, timeout=30)
-                                    response.raise_for_status()
-                                    file_bytes = response.content
-                                    if not mime_type and response.headers.get('Content-Type'):
-                                        mime_type = response.headers.get('Content-Type')
-                                except Exception as e:
-                                    logger.error(f"Failed to download image from Whapi: {e}")
+                            caption = (media_data.get("caption") or user_message or "").strip()
+                            mime_type = media_data.get("mime_type") or "image/jpeg"
+                            filename = media_data.get("filename") or media_data.get("id") or "image.jpg"
 
-                            if file_bytes:
-                                filename = media_data.get('filename') or media_data.get('id') or 'image.jpg'
-                                attachments_payload.append({
-                                    'bytes': file_bytes,
-                                    'filename': filename,
-                                    'mime_type': mime_type
-                                })
-                                chatwoot_handler.add_message_with_attachments(
-                                    conversation_id=chatwoot_conversation_id,
-                                    content=media_caption,
-                                    attachments=attachments_payload,
-                                    message_type='incoming'
-                                )
-                                logger.info('Customer image forwarded to Chatwoot with attachment upload')
+                            if _upload_attachment(media_url or "", filename, mime_type, caption):
+                                logger.info("Customer image forwarded to Chatwoot with attachment upload")
+                                chatwoot_message = None
                             else:
-                                media_url = media_url or '[Image URL not available]'
-                                caption_part = ': ' + media_caption if media_caption else ''
-                                chatwoot_message = 'Image' + caption_part + '\n' + media_url
-                                chatwoot_handler.add_message_to_conversation(
-                                    conversation_id=chatwoot_conversation_id,
-                                    message=chatwoot_message,
-                                    message_type='incoming'
-                                )
-                        elif message_type == 'document' and message_data.get('document'):
-                            media_data = message_data['document']
-                            media_url = media_data.get('link') or media_data.get('url')
-                            if not media_url and media_data.get('id'):
-                                media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
-                            media_caption = media_data.get('caption') or message_data.get('text', '') or user_message or ''
+                                media_url = media_url or "[Image URL not available]"
+                                caption_part = f": {caption}" if caption else ""
+                                chatwoot_message = f"🖼️ Image{caption_part}\n{media_url}"
 
-                            file_bytes = None
-                            mime_type = media_data.get('mime_type') or 'application/octet-stream'
-                            if media_url:
-                                try:
-                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
-                                    response = requests.get(media_url, headers=headers, timeout=30)
-                                    response.raise_for_status()
-                                    file_bytes = response.content
-                                    if not mime_type and response.headers.get('Content-Type'):
-                                        mime_type = response.headers.get('Content-Type')
-                                except Exception as e:
-                                    logger.error(f"Failed to download document from Whapi: {e}")
+                        elif message_type == "document" and message_data.get("document"):
+                            media_data = message_data["document"]
+                            media_url = media_data.get("link") or media_data.get("url")
+                            if not media_url and media_data.get("id"):
+                                media_url = f"https://gate.whapi.cloud/media/{media_data.get('id')}"
 
-                            if file_bytes:
-                                filename = media_data.get('filename') or media_data.get('id') or 'document.pdf'
-                                attachments_payload.append({
-                                    'bytes': file_bytes,
-                                    'filename': filename,
-                                    'mime_type': mime_type
-                                })
-                                chatwoot_handler.add_message_with_attachments(
-                                    conversation_id=chatwoot_conversation_id,
-                                    content=media_caption,
-                                    attachments=attachments_payload,
-                                    message_type='incoming'
-                                )
-                                logger.info('Customer document forwarded to Chatwoot with attachment upload')
-                            else:
-                                media_url = media_url or '[Document URL not available]'
-                                filename = media_data.get('filename', 'document')
-                                caption_part = ': ' + media_caption if media_caption else ''
-                                chatwoot_message = 'Document: ' + filename + caption_part + '\n' + media_url
-                                chatwoot_handler.add_message_to_conversation(
-                                    conversation_id=chatwoot_conversation_id,
-                                    message=chatwoot_message,
-                                    message_type='incoming'
-                                )
-                        elif message_type in ['audio', 'voice', 'ptt'] and message_data.get('voice'):
-                            media_data = message_data['voice']
-                            media_url = media_data.get('link') or media_data.get('url')
-                            if not media_url and media_data.get('id'):
-                                media_url = f"https://gate.whapi.cloud/media/{media_data['id']}"
-                            media_caption = message_data.get('text', '') or user_message or ''
+                            filename = (
+                                media_data.get("filename")
+                                or media_data.get("file_name")
+                                or media_data.get("fileName")
+                                or "document"
+                            )
+                            mime_type = media_data.get("mime_type") or "application/octet-stream"
+                            caption = (media_data.get("caption") or user_message or "").strip()
 
-                            file_bytes = None
-                            mime_type = media_data.get('mime_type') or 'audio/ogg'
-                            if media_url:
-                                try:
-                                    headers = {'Authorization': f"Bearer {whatsapp_handler.api_token}"}
-                                    response = requests.get(media_url, headers=headers, timeout=30)
-                                    response.raise_for_status()
-                                    file_bytes = response.content
-                                    if not mime_type and response.headers.get('Content-Type'):
-                                        mime_type = response.headers.get('Content-Type')
-                                except Exception as e:
-                                    logger.error(f"Failed to download voice message from Whapi: {e}")
+                            try:
+                                from utils.helpers import is_video_file
+                                is_video_doc = is_video_file(filename) or (mime_type or "").startswith("video/")
+                            except Exception:
+                                is_video_doc = (mime_type or "").startswith("video/")
 
-                            if file_bytes:
-                                # Determine filename and extension from mime type
-                                if 'ogg' in mime_type:
-                                    ext = 'ogg'
-                                elif 'mp3' in mime_type:
-                                    ext = 'mp3'
-                                elif 'm4a' in mime_type or 'mp4' in mime_type:
-                                    ext = 'm4a'
-                                elif 'wav' in mime_type:
-                                    ext = 'wav'
+                            if _upload_attachment(media_url or "", filename, mime_type, caption):
+                                if is_video_doc:
+                                    logger.info("Customer video (as document) forwarded to Chatwoot with attachment upload")
                                 else:
-                                    ext = 'ogg'
-                                
-                                filename = media_data.get('filename') or media_data.get('id') or f'voice.{ext}'
-                                if not filename.endswith(f'.{ext}'):
-                                    filename = f'voice.{ext}'
-                                    
-                                attachments_payload.append({
-                                    'bytes': file_bytes,
-                                    'filename': filename,
-                                    'mime_type': mime_type
-                                })
-                                chatwoot_handler.add_message_with_attachments(
-                                    conversation_id=chatwoot_conversation_id,
-                                    content=media_caption if media_caption else 'Voice message',
-                                    attachments=attachments_payload,
-                                    message_type='incoming'
-                                )
-                                logger.info('Customer voice message forwarded to Chatwoot with attachment upload')
+                                    logger.info("Customer document forwarded to Chatwoot with attachment upload")
+                                chatwoot_message = None
                             else:
-                                media_url = media_url or '[Voice message URL not available]'
-                                chatwoot_message = 'Voice/Audio message\n' + media_url
-                                chatwoot_handler.add_message_to_conversation(
-                                    conversation_id=chatwoot_conversation_id,
-                                    message=chatwoot_message,
-                                    message_type='incoming'
+                                media_url = media_url or "[Document URL not available]"
+                                caption_part = f": {caption}" if caption else ""
+                                label = "🎬 Video (as document)" if is_video_doc else "📄 Document"
+                                chatwoot_message = f"{label}: {filename}{caption_part}\n{media_url}"
+
+                        elif message_type == "video":
+                            media_data = message_data.get("video")
+                            if not isinstance(media_data, dict):
+                                raw_msg = message_data.get("raw_message") if isinstance(message_data, dict) else None
+                                if isinstance(raw_msg, dict):
+                                    media_data = raw_msg.get("video")
+
+                            if isinstance(media_data, dict):
+                                media_url = media_data.get("link") or media_data.get("url")
+                                if not media_url and media_data.get("id"):
+                                    media_url = f"https://gate.whapi.cloud/media/{media_data.get('id')}"
+
+                                caption = (media_data.get("caption") or user_message or "").strip()
+                                mime_type = media_data.get("mime_type") or "video/mp4"
+
+                                filename = (
+                                    media_data.get("filename")
+                                    or media_data.get("file_name")
+                                    or media_data.get("fileName")
+                                    or media_data.get("id")
                                 )
+                                if not filename:
+                                    ext = mimetypes.guess_extension(mime_type) or ".mp4"
+                                    filename = f"video{ext}"
+
+                                if _upload_attachment(media_url or "", filename, mime_type, caption):
+                                    logger.info("Customer video forwarded to Chatwoot with attachment upload")
+                                    chatwoot_message = None
+                                else:
+                                    media_url = media_url or "[Video URL not available]"
+                                    caption_part = f": {caption}" if caption else ""
+                                    chatwoot_message = f"🎬 Video{caption_part}\n{media_url}"
+                            else:
+                                chatwoot_message = user_message or "[video message]"
+
                         else:
-                            # Non-image or plain text: keep previous behavior
-                            if message_type == 'text':
+                            # Non-media or unsupported media: keep previous behavior
+                            if message_type == "text":
                                 chatwoot_message = user_message
+                            elif message_type in ["audio", "voice", "ptt"] and message_data.get("voice"):
+                                media_data = message_data["voice"]
+                                media_url = media_data.get("link") or media_data.get("url") or "[Audio URL not available]"
+                                chatwoot_message = f"🔊 Voice/Audio message\n{media_url}"
+                            elif message_type == "sticker":
+                                media_data = message_data.get("image", {}) or {}
+                                media_url = media_data.get("link") or media_data.get("url") or "[Sticker URL not available]"
+                                chatwoot_message = f"🏷️ Sticker\n{media_url}"
                             else:
-                                media_caption = message_data.get('text', '')
+                                chatwoot_message = f"[{message_type} message]"
 
-
-
-                                if message_type == 'sticker':
-                                    media_data = message_data.get('image', {})
-                                    media_url = media_data.get('link') or media_data.get('url') or '[Sticker URL not available]'
-                                    chatwoot_message = 'Sticker\n' + media_url
-                                else:
-                                    chatwoot_message = '[' + message_type + ' message]'
-
+                        if chatwoot_message:
                             chatwoot_handler.add_message_to_conversation(
                                 conversation_id=chatwoot_conversation_id,
                                 message=chatwoot_message,
-                                message_type='incoming'
+                                message_type="incoming"
                             )
 
                         logger.info(f"Customer message forwarded to Chatwoot conversation {chatwoot_conversation_id}")
@@ -2594,6 +2545,29 @@ IMPORTANT: This customer is ALREADY a member!
 
                                     logger.info(f"✓ Document processed successfully: {filename}")
                                     logger.info(f"  Extracted content length: {len(content)} characters")
+
+                                    # Forward extracted document content to Chatwoot
+                                    if chatwoot_conversation_id:
+                                        try:
+                                            # Prepare document content for Chatwoot (limit to first 1000 chars)
+                                            content_preview = content[:1000]
+                                            if len(content) > 1000:
+                                                content_preview += f"\n\n... (truncated, total {len(content)} characters)"
+                                            
+                                            if caption_text:
+                                                chatwoot_doc_message = f"📄 Document: {filename}\n\n{caption_text}\n\n--- Extracted Content ---\n{content_preview}"
+                                            else:
+                                                chatwoot_doc_message = f"📄 Document: {filename}\n\n--- Extracted Content ---\n{content_preview}"
+                                            
+                                            chatwoot_handler.add_message_to_conversation(
+                                                conversation_id=chatwoot_conversation_id,
+                                                message=chatwoot_doc_message,
+                                                message_type='incoming'
+                                            )
+                                            logger.info(f"Document content forwarded to Chatwoot conversation {chatwoot_conversation_id}")
+                                        except Exception as chatwoot_error:
+                                            logger.error(f"Failed to forward document content to Chatwoot: {chatwoot_error}")
+
                             except Exception as e:
                                 # EDGE CASE: Text extraction failed
                                 logger.error(f"❌ Document text extraction failed: {str(e)}")

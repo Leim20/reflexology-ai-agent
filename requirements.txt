@@ -11,3 +11,5 @@ PyYAML==6.0.1
 gunicorn==21.2.0
 APScheduler==3.10.4
 gspread==6.1.2
+opencv-python>=4.8.0
+moviepy>=1.0.3

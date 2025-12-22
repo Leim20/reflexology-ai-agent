@@ -9,6 +9,24 @@ BUSINESS_INFO:
 Name: Serenity Reflexology (Example City Branch / Downtown)
 Phone: 03-1234 5678
 WhatsApp: Available for bookings
+
+# ============================================================================
+# PAYMENT METHODS
+# ============================================================================
+
+Accepted Payments: 现金 (Cash), 卡 (Card), 电子钱包 (E-Wallet), 网上转账 (Bank Transfer)
+
+Details (only mention if customer asks specifically):
+- Card: Visa, Mastercard (credit/debit)
+- E-Wallet: Touch 'n Go, GrabPay, ShopeePay, Boost
+- Bank Transfer: DuitNow supported
+
+⚠️ CRITICAL: Payment collected BEFORE service begins (先收钱才进行按摩服务)
+- NOT after service
+- For bank transfer: Show payment proof before service starts
+
+**Response Guide:** First mention = general (现金、卡、电子钱包、网上转账). Details only if asked.
+
 Google Maps: https://g.co/kgs/czy8U83
 Hours: Daily 10:00 AM - 12:00 AM (Midnight)
 Last Call: 11:30 PM

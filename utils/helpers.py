@@ -14,7 +14,8 @@ logger = get_logger(__name__)
 IMAGE_EXTENSIONS: Set[str] = {'jpg', 'jpeg', 'png'}
 DOCUMENT_EXTENSIONS: Set[str] = {'txt', 'pdf', 'docx'}
 VOICE_EXTENSIONS: Set[str] = {'mp3', 'wav', 'ogg', 'm4a', 'webm'}
-ALL_ALLOWED_EXTENSIONS: Set[str] = IMAGE_EXTENSIONS | DOCUMENT_EXTENSIONS | VOICE_EXTENSIONS
+VIDEO_EXTENSIONS: Set[str] = {'mp4', 'mov', 'avi', 'webm', 'mkv', 'flv', '3gp', 'mpeg', 'mpg'}
+ALL_ALLOWED_EXTENSIONS: Set[str] = IMAGE_EXTENSIONS | DOCUMENT_EXTENSIONS | VOICE_EXTENSIONS | VIDEO_EXTENSIONS
 
 
 def get_file_extension(filename: str) -> str:
@@ -89,6 +90,14 @@ def is_voice_file(filename: str) -> bool:
     return result
 
 
+
+
+def is_video_file(filename: str) -> bool:
+    """Check if file is a video file"""
+    ext = get_file_extension(filename)
+    result = ext in VIDEO_EXTENSIONS
+    logger.debug(f"Is '{filename}' a video file? {result}")
+    return result
 def format_file_size(size_bytes: int) -> str:
     """Format file size in human-readable format"""
     if size_bytes < 1024:

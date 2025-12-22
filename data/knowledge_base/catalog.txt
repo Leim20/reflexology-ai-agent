@@ -21,9 +21,86 @@ Branch Locations:
 - Downtown (Main branch for this agent)
 - Multiple branches available (refer customers to specific branch contact)
 
+PAYMENT_METHODS:
+
+## Accepted Payment Methods (我们接受以下付款方式)
+
+We accept the following payment methods for your convenience:
+
+**Payment Methods:**
+- 现金 (Cash)
+- 卡 (Card/Credit Card/Debit Card) - Visa, Mastercard
+- 电子钱包 (E-Wallet) - Touch 'n Go, GrabPay, ShopeePay, Boost
+- 网上转账 (Bank Transfer) - DuitNow supported
+
+**Note for Agent:** When customer asks generally about payment, just say "现金、卡、电子钱包、网上转账". Only list specific e-wallet names (TNG, GrabPay, etc.) if customer specifically asks "what e-wallets?" or "电子钱包有哪些?".
+
+## 🚨 IMPORTANT: Payment Timing (付款时间)
+
+⚠️ **CRITICAL BUSINESS POLICY - Payment is collected BEFORE service:**
+
+**Payment Collection Process:**
+1. Customer arrives and confirms service
+2. **Payment is collected FIRST** (先收钱)
+3. Service begins after payment is received
+4. Receipt is provided after service completion
+
+**For Online Banking Transfer:**
+- If customer chooses online transfer/DuitNow
+- Customer makes payment BEFORE service begins
+- **Must show payment proof to staff** (请出示付款凭证给员工确认)
+- Service begins after payment confirmation
+
+**Key Rule:**
+- We collect payment BEFORE providing massage service (我们都是收了钱才进行按摩服务)
+- NOT after service completion
+- This applies to ALL payment methods
+
+## Common Payment Questions
+
+Q: When do I need to pay?
+A: Payment is collected before your massage service begins. You can pay by cash, card, e-wallet, or online transfer.
+
+Q: Can I pay after the massage?
+A: No, our policy is to collect payment before service begins. This applies to all payment methods.
+
+Q: I want to pay by online transfer, when should I transfer?
+A: You can transfer before arrival or upon arrival. Please show the payment proof to our staff before your massage begins.
+
+Q: What e-wallets do you accept?
+A: We accept Touch 'n Go, GrabPay, ShopeePay, and Boost.
+
+Q: Do you accept credit cards?
+A: Yes, we accept Visa and Mastercard credit cards.
+
+Q: 可以用什么方式付款？/ What payment methods do you accept?
+A: 我们接受现金、卡、电子钱包和网上转账。付款在服务前进行。
+   We accept cash, card, e-wallet, and bank transfer. Payment is collected before service.
+
+Q: 电子钱包有哪些？/ What e-wallets do you accept?
+A: Touch 'n Go、GrabPay、ShopeePay、Boost都可以。
+   Touch 'n Go, GrabPay, ShopeePay, and Boost are accepted.
+
+Q: 可以刷卡吗？/ Can I pay by card?
+A: 可以，我们接受卡付款（Visa/Mastercard）。
+   Yes, we accept card payments (Visa/Mastercard).
+
+Q: 网上转账可以吗？/ Can I use online transfer?
+A: 可以，支持DuitNow。请在服务前出示付款凭证给员工。
+   Yes, DuitNow is supported. Please show payment proof to staff before service.
+
+
+
 # ============================================================================
 
-SERVICES_PRICING: 
+SERVICES_PRICING:
+
+⚠️ **IMPORTANT FOR AI: This pricing information is for YOUR REFERENCE ONLY**
+📸 **When customer asks for prices/menu → CALL send_menu_image() function**
+❌ **DO NOT copy/paste this text menu to customer directly**
+✅ **USE this section to answer specific follow-up questions after image is sent**
+
+--- 
 
 # ============================================================================
 # 📋 SERVICES & PRICING - VERSIONED MENU SYSTEM
@@ -534,20 +611,6 @@ Example Scenarios:
 - ✗ Wrong: Member cannot claim free massage multiple times in birthday month
 - ✗ Wrong: Friends 20% discount does NOT apply if member comes alone
 
-## Member-Only Promotions
-
-### Happy Hour Promotion (Example City Branch Only)
-When: Every Tuesday to Thursday, 7:00 PM - 10:00 PM
-Service: 120-minute Aromatherapy Body Massage (推拿)
-Regular Price: RM 278 (non-member) / RM 199 (member)
-Member Happy Hour Price: SAME as regular member price (RM 199)
-NOTE: October 2025 pricing - See [SERVICES_PRICING] section for current rates
-Requirements:
-- SERENITY Members only
-- Advance booking required (limited slots)
-- SERENITY Top Up Points CANNOT be used for this promotion
-Terms: Members can book during happy hour times for regular member pricing
-
 ## SERENITY Points & Rewards System (Updated November 2025)
 
 ### Points Accumulation System (积分累积制度 - Starting November 2025)
@@ -592,7 +655,7 @@ Terms: Members can book during happy hour times for regular member pricing
 - Example: Top up RM1000 → Get extra RM150 credit (Example City Branch exclusive)
 - Continue earning points on every purchase made with top-up credit
 - Top-up points and credits can be used for regular services
-- Top-up points CANNOT be used for special promotions (like Happy Hour)
+- Top-up points CANNOT be used for special promotions 
 
 ### How Points Work
 1. Buy services → Earn points automatically
@@ -696,7 +759,7 @@ Terms: Members can book during happy hour times for regular member pricing
 - 例如：充值 RM1000 → 获得额外 RM150 信用额（示例城分店专属）
 - 使用充值信用额消费时继续累积积分
 - 充值积分和信用额可用于常规服务
-- 充值积分不能用于特别促销（如欢乐时光）
+- 充值积分不能用于特别促销
 
 ### 积分系统运作方式
 1. 购买服务 → 自动累积积分
@@ -826,10 +889,10 @@ Q: Need to cancel appointment
 A: Ok no problem! Thank you for informing us. Feel free to book again next time.
 
 Q: Latest menu and price?
-A: Our latest prices: Foot massage 45min RM69, Foot+back 45+15min RM89, Body massage 90min RM159 (includes free cupping/guasha/ear candling/belly candling), Body 120min RM258. Members get special Happy Hour pricing Tue-Thu 7-10pm.
+A: Our latest prices (October 2025): Foot 90min RM189/139, Body 90min RM209/169 (includes free add-ons), Body 120min RM278/199. Also have budget options: Foot 60min RM129/99, Foot 70min RM149/109, Body 60min RM149/109. Prices shown as non-member/member.
 
 Q: Any promo for member?
-A: Member promotions: Birthday month get FREE 1 hour massage + friends get 20% off. Happy Hour (Tue-Thu 7-10pm): 120min body massage RM159 instead of RM258. Registration is free!
+A: Member promotions: Birthday month get FREE 1 hour massage + friends get 20% off. Members get 19-28% discount on all services. Plus accumulate points starting Nov 2025. Registration is free!
 
 # ============================================================================
 
@@ -1079,40 +1142,6 @@ For VIP/regular customers:
 "As one of our valued customers, let me have [Role] personally assist you with this..."
 
 # ============================================================================
-
-PAYMENT_METHODS:
-
-## Accepted Payment Methods (接受的付款方式)
-We accept the following payment methods:
-- Cash (现金) ✅ ACCEPTED
-- Credit Card (信用卡) ✅ ACCEPTED - Visa, Mastercard
-- Touch 'n Go / TNG (TNG电子钱包) ✅ ACCEPTED - Yes we accept TNG!
-- GrabPay ✅ ACCEPTED
-- ShopeePay ✅ ACCEPTED
-- Boost ✅ ACCEPTED
-- Online Bank Transfer (网上银行转账) ✅ ACCEPTED - DuitNow supported
-
-IMPORTANT: Touch 'n Go (TNG) IS ACCEPTED! 我们接受TNG付款！
-
-## Payment Notes
-- All payments are made at the outlet after service
-- For online transfer, please show proof of payment to staff
-- Credit card acceptance subject to terminal availability
-
-## Common Payment Q&A
-
-Q: 可以用什么方式付款？/ What payment methods do you accept?
-A: 我们接受现金、信用卡（Visa/Mastercard）、Touch 'n Go、电子钱包（GrabPay、ShopeePay、Boost）和网上银行转账。
-   We accept cash, credit cards (Visa/Mastercard), Touch 'n Go, e-wallets (GrabPay, ShopeePay, Boost), and online bank transfer.
-
-Q: 可以刷卡吗？/ Can I pay by card?
-A: 可以，我们接受Visa和Mastercard信用卡。
-   Yes, we accept Visa and Mastercard credit cards.
-
-Q: 接受TNG吗？/ Do you accept Touch 'n Go?
-A: 是的，我们接受Touch 'n Go电子钱包付款。
-   Yes, we accept Touch 'n Go eWallet payments.
-
 # ============================================================================
 
 # ============================================================================

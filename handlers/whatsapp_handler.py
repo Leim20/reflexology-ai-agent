@@ -449,6 +449,142 @@ class WhatsAppHandler(BasePlatformHandler):
                 'error': str(e),
                 'message_id': None
             }
+
+    def send_video(self, to: str, video_url: str, caption: str = "", filename: str = "video.mp4") -> Dict[str, Any]:
+        """
+        Send a video via WhatsApp using Whapi API
+
+        Args:
+            to (str): Recipient phone number
+            video_url (str): URL of the video to send
+            caption (str, optional): Caption text to display with video
+            filename (str, optional): Filename for the video
+
+        Returns:
+            dict: {"success": bool, "error": str or None, "message_id": str or None}
+        """
+        logger.info("="*60)
+        logger.info("SENDING WHATSAPP VIDEO")
+        logger.info("="*60)
+
+        logger.debug(f"To (raw): {to}")
+        logger.debug(f"Video URL: {video_url}")
+        logger.debug(f"Filename: {filename}")
+        logger.debug(f"Caption: {caption[:100]}..." if caption else "No caption")
+
+        # Format phone number for WHAPI
+        formatted_to = self.format_phone_number(to)
+        logger.debug(f"To (formatted): {formatted_to}")
+
+        url = f"{self.base_url}/messages/video"
+
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Content-Type": "application/json"
+        }
+
+        payload = {
+            "to": formatted_to,
+            "media": video_url,
+            "filename": filename
+        }
+
+        if caption:
+            payload["caption"] = caption
+
+        try:
+            logger.debug(f"Calling Whapi API: {url}")
+            response = requests.post(url, json=payload, headers=headers, timeout=60)
+            response.raise_for_status()
+
+            response_data = response.json()
+            message_id = response_data.get("id", None)
+
+            logger.info("✓ Video sent successfully")
+            logger.info(f"  Message ID: {message_id}")
+            logger.info("="*60)
+
+            return {
+                "success": True,
+                "error": None,
+                "message_id": message_id,
+                "data": response_data
+            }
+
+        except requests.exceptions.HTTPError as http_err:
+            status_code = http_err.response.status_code if http_err.response else None
+            response_text = http_err.response.text if http_err.response else ""
+
+            if status_code == 401:
+                error_msg = "Unauthorized: check WHAPI_API_TOKEN"
+            elif status_code == 402:
+                error_msg = "Payment required: please check Whapi plan or balance"
+            elif status_code == 403:
+                error_msg = "Forbidden: check Whapi channel permissions or region"
+            elif status_code == 429:
+                error_msg = "Too many requests: Whapi rate limit reached, retry later"
+            else:
+                error_msg = f"HTTP {status_code}: {response_text}" if status_code else str(http_err)
+
+            logger.error("❌ Failed to send WhatsApp video")
+            logger.error(f"HTTPError: {error_msg}")
+            logger.exception("Full error traceback:")
+            logger.error("="*60)
+
+            return {
+                "success": False,
+                "error": error_msg,
+                "message_id": None
+            }
+
+        except Exception as e:
+            logger.error("❌ Failed to send WhatsApp video")
+            logger.error(f"Error: {str(e)}")
+            logger.exception("Full error traceback:")
+            logger.error("="*60)
+
+            return {
+                "success": False,
+                "error": str(e),
+                "message_id": None
+            }
+
+    def download_video(self, video_url: str, save_path: str) -> bool:
+        """
+        Download video file from Whapi and save to disk
+
+        Args:
+            video_url (str): URL to the video file from Whapi
+            save_path (str): Path where to save the video file
+
+        Returns:
+            bool: True if successful, False otherwise
+        """
+        logger.info(f"Downloading video from Whapi")
+        logger.debug(f"URL: {video_url[:50]}...")
+        logger.debug(f"Save path: {save_path}")
+
+        try:
+            headers = {
+                "Authorization": f"Bearer {self.api_token}"
+            }
+
+            response = requests.get(video_url, headers=headers, timeout=60)
+            response.raise_for_status()
+
+            # Save video file to disk
+            with open(save_path, "wb") as video_file:
+                video_file.write(response.content)
+
+            file_size_mb = len(response.content) / (1024 * 1024)
+
+            logger.info(f"✓ Video downloaded and saved ({file_size_mb:.2f} MB)")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to download video: {str(e)}")
+            logger.exception("Full error traceback:")
+            return False
     def get_contact_info(self, phone: str) -> Optional[Dict[str, Any]]:
         """
         Fetch WhatsApp contact/profile information from Whapi
