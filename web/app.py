@@ -158,20 +158,51 @@ def detect_menu_request(message: str, keywords: list) -> bool:
 
 def detect_language(message: str) -> str:
     """
-    Roughly detect if message is primarily Chinese or English.
-    This is used to choose which menu image URL to send.
+    Detect if message is primarily Chinese, Malay, or English.
+    This is used to choose which menu image URL to send and response language.
     """
     if not message:
         return "english"
 
-    chinese_chars = sum(1 for c in message if "\u4e00" <= c <= "\u9fff")
+    message_lower = message.lower()
+
+    # Malay keyword detection (common Malay words)
+    malay_keywords = [
+        'nak', 'sini', 'kah', 'boleh', 'saya', 'untuk', 'bila', 'berapa',
+        'ada', 'tak', 'dah', 'apa', 'mana', 'siapa', 'kenapa', 'macam',
+        'sudah', 'belum', 'tengah', 'akan', 'hendak', 'jadi', 'dapat',
+        'pergi', 'balik', 'masa', 'hari', 'malam', 'pagi', 'petang',
+        'esok', 'semalam', 'tadi', 'nanti', 'sekarang', 'dulu',
+        'temujanji', 'urut', 'servis', 'harga', 'tarikh', 'jantina',
+        'lelaki', 'perempuan', 'telefon', 'nama', 'hantar', 'isi'
+    ]
+    
+    # Count Malay keywords
+    malay_count = sum(1 for word in malay_keywords if word in message_lower)
+    
+    # If 2+ Malay keywords found, it's likely Malay
+    if malay_count >= 2:
+        return "malay"
+    
+    # If 1 Malay keyword and message is short (< 20 chars), it's likely Malay
+    if malay_count == 1 and len(message) < 20:
+        return "malay"
+
+    # Chinese character detection
+    chinese_chars = sum(1 for c in message if "一" <= c <= "鿿")
     total_chars = len([c for c in message if c.strip()])
 
     if total_chars == 0:
         return "english"
 
     ratio = chinese_chars / total_chars
-    return "chinese" if ratio > 0.3 else "english"
+    
+    # If > 30% Chinese characters, it's Chinese
+    if ratio > 0.3:
+        return "chinese"
+    
+    # Otherwise, default to English
+    return "english"
 
 
 # ============================================================================
@@ -1003,8 +1034,8 @@ def get_send_menu_image_function_definition():
                 "properties": {
                     "language": {
                         "type": "string",
-                        "enum": ["chinese", "english"],
-                        "description": "Choose which menu image to send. Default is based on customer's language (Chinese vs English)."
+                        "enum": ["chinese", "english", "malay"],
+                        "description": "Choose which menu image to send: chinese, english, or malay. Default is based on customer's language."
                     }
                 },
                 "required": []
@@ -1040,10 +1071,22 @@ def handle_send_menu_image_function_call(
         menu_file_path = menu_config.get('english_file_path')
         caption = menu_config.get('caption_english', '')
         language = 'english'
+    elif requested_language == 'malay':
+        # Malay users default to English menu
+        menu_file_path = menu_config.get('english_file_path')
+        caption = menu_config.get('caption_english', '')
+        language = 'english'
+        logger.info("Malay customer - using English menu as default")
     elif language_hint == 'chinese':
         menu_file_path = menu_config.get('chinese_file_path')
         caption = menu_config.get('caption_chinese', '')
         language = 'chinese'
+    elif language_hint == 'malay':
+        # Malay users default to English menu
+        menu_file_path = menu_config.get('english_file_path')
+        caption = menu_config.get('caption_english', '')
+        language = 'english'
+        logger.info("Malay customer - using English menu as default")
     else:
         # Auto fallback to English if not specified
         language = 'english'
@@ -1871,8 +1914,30 @@ def chatwoot_webhook():
                 image_url=att_url,
                 caption=caption
             )
+        elif att_type in ["file", "document", "audio", "video"] and att_url:
+            # Send as document to WhatsApp
+            # Extract filename from Chatwoot URL (it's embedded in the URL path)
+            att_filename = "document"
+            if att_url:
+                try:
+                    from urllib.parse import unquote
+                    # Extract last part of URL path as filename
+                    url_parts = att_url.split("/")
+                    if url_parts:
+                        filename_encoded = url_parts[-1]
+                        att_filename = unquote(filename_encoded)  # Decode %E8... to actual characters
+                        logger.debug(f"Extracted filename from URL: {att_filename}")
+                except Exception as e:
+                    logger.warning(f"Could not extract filename from URL: {e}")
+                    att_filename = "document"
+            logger.info(f"Sending document from Chatwoot to WhatsApp: {att_filename}")
+            send_result = whatsapp_handler.send_document(
+                to=phone_formatted,
+                document_url=att_url,
+                caption=caption,
+                filename=att_filename
+            )
         else:
-            # Fallback: send link + caption as text so customer at least sees the attachment link
             body_parts = []
             if caption:
                 body_parts.append(caption)
@@ -2019,6 +2084,16 @@ def whapi_webhook():
 
         logger.info(f"From: {sender}")
         logger.info(f"Type: {message_type}")
+        
+        # Extract link_preview data from raw_message if this is a link_preview message
+        if message_type == "link_preview" and message_data.get('raw_message', {}).get('link_preview'):
+            link_preview_data = message_data['raw_message']['link_preview']
+            # Store link_preview data directly in message_data for Chatwoot forwarding
+            message_data['link_preview'] = link_preview_data
+            # Extract URL to use as user_message (so it won't be empty)
+            url = link_preview_data.get('url') or link_preview_data.get('body') or ''
+            user_message = url
+            logger.info(f"Extracted link_preview URL: {url[:100]}...")
 
         # ===================================================================
         # DUPLICATE MESSAGE DETECTION
@@ -2154,8 +2229,10 @@ def whapi_webhook():
                         elif message_type == "document" and message_data.get("document"):
                             media_data = message_data["document"]
                             media_url = media_data.get("link") or media_data.get("url")
-                            if not media_url and media_data.get("id"):
-                                media_url = f"https://gate.whapi.cloud/media/{media_data.get('id')}"
+                            if not media_url and message_id:
+                                # Use message_id to construct download URL
+                                media_url = f"https://gate.whapi.cloud/messages/{message_id}/media"
+                                logger.debug(f"Constructed document URL from message_id: {media_url}")
 
                             filename = (
                                 media_data.get("filename")
@@ -2225,12 +2302,37 @@ def whapi_webhook():
                                 chatwoot_message = user_message
                             elif message_type in ["audio", "voice", "ptt"] and message_data.get("voice"):
                                 media_data = message_data["voice"]
-                                media_url = media_data.get("link") or media_data.get("url") or "[Audio URL not available]"
-                                chatwoot_message = f"🔊 Voice/Audio message\n{media_url}"
+                                media_url = media_data.get("link") or media_data.get("url")
+                                
+                                caption = (media_data.get("caption") or user_message or "").strip()
+                                mime_type = media_data.get("mime_type") or "audio/ogg"
+                                
+                                filename = media_data.get("filename") or media_data.get("file_name") or media_data.get("id")
+                                if not filename:
+                                    import mimetypes
+                                    ext = mimetypes.guess_extension(mime_type) or ".ogg"
+                                    filename = f"voice{ext}"
+                                
+                                if _upload_attachment(media_url or "", filename, mime_type, caption):
+                                    logger.info("Customer voice/audio forwarded to Chatwoot with attachment upload")
+                                    chatwoot_message = None
+                                else:
+                                    media_url = media_url or "[Audio URL not available]"
+                                    chatwoot_message = f"🔊 Voice/Audio message" + chr(10) + media_url
+
                             elif message_type == "sticker":
                                 media_data = message_data.get("image", {}) or {}
                                 media_url = media_data.get("link") or media_data.get("url") or "[Sticker URL not available]"
                                 chatwoot_message = f"🏷️ Sticker\n{media_url}"
+                            elif message_type == "link_preview" and message_data.get("link_preview"):
+                                # Handle link preview messages (URLs with preview)
+                                link_data = message_data["link_preview"]
+                                url = link_data.get("url") or link_data.get("body") or ""
+                                title = link_data.get("title") or ""
+                                if title:
+                                    chatwoot_message = f"{title}" + chr(10) + url
+                                else:
+                                    chatwoot_message = url
                             else:
                                 chatwoot_message = f"[{message_type} message]"
 
@@ -2547,26 +2649,26 @@ IMPORTANT: This customer is ALREADY a member!
                                     logger.info(f"  Extracted content length: {len(content)} characters")
 
                                     # Forward extracted document content to Chatwoot
-                                    if chatwoot_conversation_id:
-                                        try:
+# DISABLED:                                     if chatwoot_conversation_id:
+# DISABLED:                                         try:
                                             # Prepare document content for Chatwoot (limit to first 1000 chars)
-                                            content_preview = content[:1000]
-                                            if len(content) > 1000:
-                                                content_preview += f"\n\n... (truncated, total {len(content)} characters)"
-                                            
-                                            if caption_text:
-                                                chatwoot_doc_message = f"📄 Document: {filename}\n\n{caption_text}\n\n--- Extracted Content ---\n{content_preview}"
-                                            else:
-                                                chatwoot_doc_message = f"📄 Document: {filename}\n\n--- Extracted Content ---\n{content_preview}"
-                                            
-                                            chatwoot_handler.add_message_to_conversation(
-                                                conversation_id=chatwoot_conversation_id,
-                                                message=chatwoot_doc_message,
-                                                message_type='incoming'
-                                            )
-                                            logger.info(f"Document content forwarded to Chatwoot conversation {chatwoot_conversation_id}")
-                                        except Exception as chatwoot_error:
-                                            logger.error(f"Failed to forward document content to Chatwoot: {chatwoot_error}")
+# DISABLED:                                             content_preview = content[:1000]
+# DISABLED:                                             if len(content) > 1000:
+# DISABLED:                                                 content_preview += f"\n\n... (truncated, total {len(content)} characters)"
+# DISABLED:                                             
+# DISABLED:                                             if caption_text:
+# DISABLED:                                                 chatwoot_doc_message = f"📄 Document: {filename}\n\n{caption_text}\n\n--- Extracted Content ---\n{content_preview}"
+# DISABLED:                                             else:
+# DISABLED:                                                 chatwoot_doc_message = f"📄 Document: {filename}\n\n--- Extracted Content ---\n{content_preview}"
+# DISABLED:                                             
+# DISABLED:                                             chatwoot_handler.add_message_to_conversation(
+# DISABLED:                                                 conversation_id=chatwoot_conversation_id,
+# DISABLED:                                                 message=chatwoot_doc_message,
+# DISABLED:                                                 message_type='incoming'
+# DISABLED:                                             )
+# DISABLED:                                             logger.info(f"Document content forwarded to Chatwoot conversation {chatwoot_conversation_id}")
+# DISABLED:                                         except Exception as chatwoot_error:
+# DISABLED:                                             logger.error(f"Failed to forward document content to Chatwoot: {chatwoot_error}")
 
                             except Exception as e:
                                 # EDGE CASE: Text extraction failed
