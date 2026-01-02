@@ -327,3 +327,26 @@ class ChatwootHandler:
         except Exception as e:
             logger.error(f"Error parsing Chatwoot webhook: {e}")
             return None
+
+    def update_contact(self, contact_id: int, name: str) -> bool:
+        """
+        Update a contact's name in Chatwoot
+        
+        Args:
+            contact_id: Chatwoot contact ID
+            name: New name for the contact
+            
+        Returns:
+            bool: True if update successful, False otherwise
+        """
+        try:
+            url = f"{self.base_url}/api/v1/accounts/{self.account_id}/contacts/{contact_id}"
+            payload = {"name": name}
+            
+            response = requests.put(url, headers=self.headers, json=payload, timeout=10)
+            response.raise_for_status()
+            logger.info(f"Updated contact {contact_id} name to '{name}'")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to update contact name: {e}")
+            return False

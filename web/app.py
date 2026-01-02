@@ -473,6 +473,17 @@ def init_app():
         logger.info("   - Check & queue: Every 3 minutes")
         logger.info("   - Throttled send: Every 3 seconds")
         logger.info("   - Batch flush: Every 30 minutes")
+        # Job 5: Booking reminder (every 5 minutes)
+        scheduler.add_job(
+            func=booking_reminder_job,
+            trigger='interval',
+            minutes=1,
+            id='booking_reminder',
+            name='Send booking reminders 30-60 min before appointment',
+            replace_existing=True
+        )
+
+        logger.info("   - Booking reminder: Every 5 minutes")
     else:
         logger.warning("⚠️  Follow-up scheduler jobs not registered (missing dependencies)")
 
@@ -511,6 +522,7 @@ def init_app():
 def check_and_enroll_leads_job():
     """
     Scheduler job: Check all leads and enroll them in matching campaigns
+    Also checks warm leads from Conversation Insights
     Runs every 10 minutes
     """
     try:
@@ -518,8 +530,15 @@ def check_and_enroll_leads_job():
             return
 
         logger.info("🔄 [SCHEDULER] Running check_and_enroll_leads_job...")
+        
+        # Check regular leads from Customer Record
         stats = follow_up_manager.check_and_enroll_leads(lead_manager)
-        logger.info(f"✅ [SCHEDULER] Enrolled {stats.get('enrolled', 0)} leads in campaigns")
+        logger.info(f"✅ [SCHEDULER] Enrolled {stats.get('enrolled', 0)} leads from Customer Record")
+        
+        # Check warm leads from Conversation Insights
+        if hasattr(follow_up_manager, 'check_warm_leads_from_insights'):
+            warm_stats = follow_up_manager.check_warm_leads_from_insights(lead_manager)
+            logger.info(f"✅ [SCHEDULER] Enrolled {warm_stats.get('enrolled', 0)} warm leads from Conversation Insights")
 
     except Exception as e:
         logger.error(f"❌ [SCHEDULER] Error in check_and_enroll_leads_job: {e}")
@@ -614,7 +633,7 @@ def throttled_send_followup_job():
 
         try:
             # Get message text and campaign details
-            message_text, _ = follow_up_manager.get_next_message(phone, campaign_id)
+            message_text, _ = follow_up_manager.get_next_message(phone, campaign_id, lead_manager)
 
             if not message_text:
                 logger.warning(f"⚠️  No message text found for {phone}, campaign {campaign_id}")
@@ -732,6 +751,65 @@ def flush_batch_updates_job():
 # ============================================================================
 # BROADCAST SCHEDULER JOB
 # ============================================================================
+
+
+def booking_reminder_job():
+    """
+    Scheduler job: Send reminders for upcoming bookings
+    Runs every 5 minutes
+    Sends reminder 30-60 minutes before appointment
+    """
+    try:
+        if not lead_manager or not whatsapp_handler:
+            return
+
+        logger.info("🔔 [SCHEDULER] Running booking_reminder_job...")
+
+        # Get bookings that need reminders (30-60 min before)
+        upcoming = lead_manager.get_upcoming_bookings_for_reminder(minutes_before=5)
+
+        if not upcoming:
+            logger.debug("   No upcoming bookings need reminders")
+            return
+
+        logger.info(f"📅 [SCHEDULER] Found {len(upcoming)} bookings needing reminders")
+
+        sent_count = 0
+        for booking in upcoming:
+            try:
+                phone = str(booking.get('Phone', ''))
+                row = booking.get('row')
+                name = booking.get('Name', '')
+                service = booking.get('Service', '')
+                booking_time = booking.get('Booking Time', '')
+
+                if not phone:
+                    continue
+
+                # Generate reminder message
+                message = lead_manager.get_booking_reminder_message(booking)
+
+                # Send via WhatsApp
+                logger.info(f"📤 Sending reminder to {name} ({phone}) for {booking_time} appointment")
+                result = whatsapp_handler.send_message(to=phone, message=message)
+
+                if result.get('success'):
+                    # Mark as sent
+                    lead_manager.mark_reminder_sent(row)
+                    sent_count += 1
+                    logger.info(f"✅ Reminder sent to {phone}")
+                else:
+                    logger.warning(f"Failed to send reminder to {phone}: {result.get('message')}")
+
+            except Exception as e:
+                logger.error(f"Error sending reminder: {e}")
+                continue
+
+        logger.info(f"✅ [SCHEDULER] Sent {sent_count}/{len(upcoming)} booking reminders")
+
+    except Exception as e:
+        logger.error(f"❌ [SCHEDULER] Error in booking_reminder_job: {e}")
+
 
 def check_and_send_broadcasts_job():
     """
@@ -1017,6 +1095,80 @@ def get_record_booking_function_definition():
     }
 
 
+
+# ============================================================================
+# FUNCTION CALLING - VALIDATE BOOKING DATETIME
+# ============================================================================
+
+def get_validate_booking_datetime_function_definition():
+    """Define validate_booking_datetime function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "validate_booking_datetime",
+            "description": "Validate if a booking date and time is valid (not in the past). Call this BEFORE showing booking preview to user. Also use when user asks about availability for a specific date/time.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "booking_date": {
+                        "type": "string",
+                        "description": "The booking date in YYYY-MM-DD format"
+                    },
+                    "booking_time": {
+                        "type": "string",
+                        "description": "The booking time in HH:MM format (24-hour)"
+                    }
+                },
+                "required": ["booking_date", "booking_time"]
+            }
+        }
+    }
+
+def validate_booking_datetime(booking_date: str, booking_time: str) -> dict:
+    """Validate if booking datetime is not in the past"""
+    from datetime import datetime
+    import pytz
+    
+    try:
+        malaysia_tz = pytz.timezone('Asia/Kuala_Lumpur')
+        now = datetime.now(malaysia_tz)
+        
+        # Parse the booking datetime
+        booking_datetime_str = f"{booking_date} {booking_time}"
+        booking_dt = datetime.strptime(booking_datetime_str, "%Y-%m-%d %H:%M")
+        booking_dt = malaysia_tz.localize(booking_dt)
+        
+        if booking_dt < now:
+            return {
+                "valid": False,
+                "error": "past_datetime",
+                "message": f"The requested booking time ({booking_date} {booking_time}) is in the past. Current time is {now.strftime('%Y-%m-%d %H:%M')}. Please choose a future date and time.",
+                "current_time": now.strftime("%Y-%m-%d %H:%M")
+            }
+        
+        # Check if booking is too soon (less than 30 minutes from now)
+        minutes_until = (booking_dt - now).total_seconds() / 60
+        if minutes_until < 30:
+            return {
+                "valid": False,
+                "error": "too_soon",
+                "message": f"The requested booking time is only {int(minutes_until)} minutes away. Please book at least 30 minutes in advance.",
+                "current_time": now.strftime("%Y-%m-%d %H:%M")
+            }
+        
+        return {
+            "valid": True,
+            "message": f"The requested booking time ({booking_date} {booking_time}) is valid.",
+            "current_time": now.strftime("%Y-%m-%d %H:%M")
+        }
+        
+    except ValueError as e:
+        return {
+            "valid": False,
+            "error": "invalid_format",
+            "message": f"Invalid date/time format. Please use YYYY-MM-DD for date and HH:MM for time. Error: {str(e)}"
+        }
+
 # ============================================================================
 # FUNCTION CALLING - MENU IMAGE
 # ============================================================================
@@ -1174,6 +1326,122 @@ def handle_send_menu_image_function_call(
     return {'success': False, 'message': 'Failed to send menu image via Chatwoot or WhatsApp'}
 
 
+# ============================================================================
+# FUNCTION CALLING - TRACK CONVERSATION INFO
+# ============================================================================
+
+
+def get_track_conversation_info_function_definition():
+    """Define track_conversation_info function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "track_conversation_info",
+            "description": "Track customer pain points and recommendations after making a recommendation in STEP 3. Call this after you recommend a service to the customer, to record their needs and your suggestions for follow-up.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "Customer's phone number"
+                    },
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Customer's name (or 'Unknown' if not provided)"
+                    },
+                    "pain_points": {
+                        "type": "string",
+                        "description": "Customer's pain points or needs mentioned during conversation. Use 'direct_booking_request' if customer skipped discovery and directly asked to book. Use 'not_disclosed' if customer didn't share their pain points."
+                    },
+                    "recommendations": {
+                        "type": "string",
+                        "description": "The service(s) you recommended to the customer, e.g., '90分钟香薰身体按摩' or '90-minute body massage'"
+                    }
+                },
+                "required": ["customer_phone", "pain_points", "recommendations"]
+            }
+        }
+    }
+
+
+def handle_track_conversation_info_function_call(function_args: dict) -> dict:
+    """Handle track_conversation_info function call from AI"""
+    logger.info("="*80)
+    logger.info("HANDLING TRACK_CONVERSATION_INFO FUNCTION CALL")
+    logger.info("="*80)
+    
+    customer_phone = function_args.get('customer_phone', '')
+    customer_name = function_args.get('customer_name', 'Unknown')
+    pain_points = function_args.get('pain_points', '')
+    recommendations = function_args.get('recommendations', '')
+    
+    logger.info(f"Phone: {customer_phone}")
+    logger.info(f"Name: {customer_name}")
+    logger.info(f"Pain Points: {pain_points}")
+    logger.info(f"Recommendations: {recommendations}")
+    
+    if not lead_manager:
+        logger.error("Lead manager not initialized")
+        return {
+            'success': False,
+            'message': 'Lead manager not available'
+        }
+    
+    result = lead_manager.track_conversation_info(
+        customer_phone=customer_phone,
+        customer_name=customer_name,
+        pain_points=pain_points,
+        recommendations=recommendations
+    )
+    
+    logger.info(f"Track result: {result}")
+    logger.info("="*80)
+    
+    return result
+
+
+
+# ============================================================================
+# FUNCTION CALLING - LOOKUP MY BOOKINGS (Secure - uses sender phone only)
+# ============================================================================
+
+def get_lookup_my_bookings_function_definition():
+    """Define lookup_my_bookings function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "lookup_my_bookings",
+            "description": "Check customer booking history and records. MUST USE this when customer asks about: their bookings, appointments, reservations, last massage, previous visit, 上一次按摩, 我的预约, booking history, when did I come, past visits. This automatically uses the customer phone number - do NOT ask them for their phone number.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+
+
+# ============================================================================
+# FUNCTION CALLING - CHECK MY MEMBERSHIP (Secure - uses sender phone only)
+# ============================================================================
+
+def get_check_my_membership_function_definition():
+    """Define check_my_membership function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "check_my_membership",
+            "description": "Check if the customer is a registered member and get their membership details (points, birthday, etc). Use this when customer asks about their membership status, points balance, or member benefits. This automatically uses the customer phone number - do NOT ask them for their phone number.",
+            "parameters": {
+                "type": "object",
+                "properties": {},
+                "required": []
+            }
+        }
+    }
+
+
+
 def send_booking_notification(
     customer_name: str,
     customer_gender: str,
@@ -1283,6 +1551,7 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
         therapist_gender = 'Female'
 
     # Convert date format if needed (e.g., "2025年12月6日" -> "2025-12-06")
+# REMOVED: Old keyword conversion - now using AI datetime parser
     date_cn_match = re.search(r'(\d{4})年(\d{1,2})月(\d{1,2})日', booking_date)
     if date_cn_match:
         year, month, day = date_cn_match.groups()
@@ -2157,12 +2426,20 @@ def whapi_webhook():
                 logger.info("Forwarding customer message to Chatwoot...")
                 
                 # Create or get contact
+                whapi_name = message_data.get('from_name')
+                fallback_name = f"Customer {sender_clean[:4]}"
                 contact = chatwoot_handler.create_or_get_contact(
                     phone_number=sender_clean,
-                    name=f"Customer {sender_clean[:4]}"
+                    name=whapi_name or fallback_name
                 )
                 
                 if contact:
+                    # Option 2: Update contact name only if changed (efficient sync)
+                    contact_id = contact.get("id")
+                    current_name = contact.get("name", "")
+                    if whapi_name and current_name != whapi_name:
+                        logger.info(f"WhatsApp name changed: '{current_name}' -> '{whapi_name}', updating Chatwoot...")
+                        chatwoot_handler.update_contact(contact_id, whapi_name)
                     # Create or get conversation
                     conversation = chatwoot_handler.create_or_get_conversation(
                         contact_id=contact.get("id"),
@@ -2822,7 +3099,11 @@ INSTRUCTIONS:
             get_escalation_function_definition(),
             get_register_member_function_definition(),
             get_record_booking_function_definition(),
-            get_send_menu_image_function_definition()
+            get_validate_booking_datetime_function_definition(),
+            get_send_menu_image_function_definition(),
+            get_track_conversation_info_function_definition(),
+            get_lookup_my_bookings_function_definition(),
+            get_check_my_membership_function_definition()
         ]
 
         # Call AI with function calling enabled
@@ -2910,6 +3191,122 @@ INSTRUCTIONS:
                         "name": function_name,
                         "content": json.dumps(booking_result)
                     })
+
+
+                elif function_name == "validate_booking_datetime":
+                    validation_result = validate_booking_datetime(
+                        booking_date=function_args.get('booking_date', ''),
+                        booking_time=function_args.get('booking_time', '')
+                    )
+
+                    function_results.append({
+                        tool_call_id: tool_call['id'],
+                        role: tool,
+                        name: function_name,
+                        content: json.dumps(validation_result)
+                    })
+                elif function_name == "track_conversation_info":
+                    track_result = handle_track_conversation_info_function_call(
+                        function_args=function_args
+                    )
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(track_result)
+                    })
+                elif function_name == "lookup_my_bookings":
+                    # Secure: Use sender phone from webhook, not user input
+                    customer_phone = sender.replace('@s.whatsapp.net', '')
+                    logger.info(f"Looking up bookings for: {customer_phone}")
+
+                    bookings_result = lead_manager.get_bookings(customer_phone)
+
+                    if bookings_result['success'] and bookings_result['count'] > 0:
+                        # Has bookings - format them nicely
+                        bookings_list = bookings_result['bookings']
+                        from datetime import datetime
+                        today = datetime.now().date()
+
+                        upcoming = []
+                        past = []
+                        for b in bookings_list:
+                            try:
+                                booking_date_str = str(b.get('Booking Date', ''))
+                                booking_date = datetime.strptime(booking_date_str, '%Y-%m-%d').date()
+                                if booking_date >= today:
+                                    upcoming.append(b)
+                                else:
+                                    past.append(b)
+                            except:
+                                past.append(b)  # If date parse fails, treat as past (safer)
+
+                        result_message = {
+                            'found': True,
+                            'total_count': bookings_result['count'],
+                            'upcoming_count': len(upcoming),
+                            'past_count': len(past),
+                            'upcoming_bookings': upcoming,
+                            'last_visit': past[-1] if past else None,
+                            'message': f"Found {len(upcoming)} upcoming and {len(past)} past booking(s)"
+                        }
+                    else:
+                        # No bookings - helpful response
+                        result_message = {
+                            'found': False,
+                            'total_count': 0,
+                            'upcoming_count': 0,
+                            'message': 'No bookings found. Customer may want to make a new booking.',
+                            'suggestion': 'Offer to help them make a booking'
+                        }
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(result_message, default=str)
+                    })
+
+                elif function_name == "check_my_membership":
+                    # Secure: Use sender phone from webhook, not user input
+                    customer_phone = sender.replace('@s.whatsapp.net', '')
+                    logger.info(f"Checking membership for: {customer_phone}")
+
+                    is_member = lead_manager.check_if_member(customer_phone)
+
+                    if is_member:
+                        member_info = lead_manager.get_member_info(customer_phone)
+                        if member_info:
+                            result_message = {
+                                'is_member': True,
+                                'name': member_info.get('name', 'Unknown'),
+                                'birthday': member_info.get('birthday', 'Not set'),
+                                'registration_date': member_info.get('registration_date', 'Unknown'),
+                                'points': member_info.get('points', 0),
+                                'birthday_benefit_used': member_info.get('birthday_benefit_used', 'No'),
+                                'message': 'Customer is a registered member'
+                            }
+                        else:
+                            result_message = {
+                                'is_member': True,
+                                'message': 'Customer is a member but details unavailable'
+                            }
+                    else:
+                        # Not a member - helpful response
+                        result_message = {
+                            'is_member': False,
+                            'message': 'Customer is NOT a registered member.',
+                            'suggestion': 'Offer to help them register for membership benefits'
+                        }
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(result_message, default=str)
+                    })
+
 
             # Note: AI called a function, we'll add the final response after execution
 

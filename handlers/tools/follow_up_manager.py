@@ -298,13 +298,15 @@ class FollowUpManager:
             logger.error(f"❌ Error fetching pending follow-ups: {e}")
             return []
 
-    def get_next_message(self, phone: str, campaign_id: str) -> Tuple[Optional[str], Optional[int]]:
+    def get_next_message(self, phone: str, campaign_id: str, lead_manager=None) -> Tuple[Optional[str], Optional[int]]:
         """
         Get the next message to send for a lead in a campaign
+        Supports personalization with {name}, {pain_points}, {recommendations} placeholders
 
         Args:
             phone: Lead's phone number
             campaign_id: Campaign ID
+            lead_manager: Optional LeadManager for personalization
 
         Returns:
             Tuple of (message_text, message_number) or (None, None)
@@ -335,13 +337,60 @@ class FollowUpManager:
             message_text = campaign.get(msg_key, '')
 
             if not message_text:
-                logger.warning(f"⚠️  No message {current_msg} for campaign {campaign_id}")
+                logger.warning(f"No message {current_msg} for campaign {campaign_id}")
                 return None, None
+
+            # Personalization: Replace placeholders with actual data
+            if lead_manager and ('{name}' in message_text or '{pain_points}' in message_text or '{recommendations}' in message_text):
+                try:
+                    # Get customer context for personalization
+                    context = lead_manager.get_customer_context(phone)
+                    conv_info = context.get('conversation_info', {})
+
+                    # Get personalization data
+                    name = conv_info.get('name', '')
+                    if not name or name == 'Unknown':
+                        # Try to get from customer memory
+                        memory = lead_manager.get_customer_memory(phone)
+                        if memory:
+                            name = memory.get('name', '')
+
+                    pain_points = conv_info.get('pain_points', '')
+                    recommendations = conv_info.get('recommendations', '')
+
+                    # Replace placeholders
+                    if name and name != 'Unknown':
+                        message_text = message_text.replace('{name}', name)
+                    else:
+                        message_text = message_text.replace('{name}', '')
+                        message_text = message_text.replace('Hi {name}!', 'Hi!')
+                        message_text = message_text.replace('Hi {name}', 'Hi')
+
+                    if pain_points and pain_points not in ['direct_booking_request', 'not_disclosed']:
+                        message_text = message_text.replace('{pain_points}', pain_points)
+                    else:
+                        message_text = message_text.replace('{pain_points}', 'your concerns')
+                        message_text = message_text.replace('您{pain_points}', '您的需求')
+
+                    if recommendations:
+                        message_text = message_text.replace('{recommendations}', recommendations)
+                    else:
+                        message_text = message_text.replace('{recommendations}', 'our services')
+                        message_text = message_text.replace('考虑{recommendations}', '考虑预约')
+
+                    logger.info(f"Personalized message for {phone}: name={name}, pain={pain_points}, rec={recommendations}")
+
+                except Exception as e:
+                    logger.warning(f"Could not personalize message: {e}")
+                    # Remove unfilled placeholders gracefully
+                    message_text = message_text.replace('{name}', '')
+                    message_text = message_text.replace('{pain_points}', 'your needs')
+                    message_text = message_text.replace('{recommendations}', 'our services')
 
             return message_text, current_msg
 
         except Exception as e:
-            logger.error(f"❌ Error getting next message: {e}")
+            logger.error(f"Error getting next message: {e}")
             return None, None
 
     def mark_followup_sent(self, phone: str, campaign_id: str, message_number: int, message_text: str) -> bool:
@@ -528,20 +577,59 @@ class FollowUpManager:
     def _update_analytics_enrollment(self, campaign_id: str):
         """Update analytics when a lead is enrolled"""
         try:
-            # Implementation for analytics update
-            # Will be completed in Task 1.9
-            pass
+            # Find or create analytics row for this campaign
+            records = self.analytics_sheet.get_all_records()
+            row_idx = None
+            
+            for idx, record in enumerate(records, start=2):
+                if record.get('Campaign ID') == campaign_id:
+                    row_idx = idx
+                    break
+            
+            if row_idx:
+                # Update existing row - increment Total Enrolled
+                current_enrolled = int(self.analytics_sheet.cell(row_idx, 3).value or 0)
+                self.analytics_sheet.update_cell(row_idx, 3, current_enrolled + 1)
+                self.analytics_sheet.update_cell(row_idx, 11, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+            else:
+                # Create new analytics row
+                campaign = self.get_campaign_by_id(campaign_id)
+                campaign_name = campaign.get('Campaign Name', campaign_id) if campaign else campaign_id
+                new_row = [
+                    campaign_id,      # Campaign ID
+                    campaign_name,    # Campaign Name
+                    1,                # Total Enrolled
+                    0, 0, 0,          # Message 1/2/3 Sent
+                    0, 0,             # Responses, Conversions
+                    '0%', '0%',       # Response Rate, Conversion Rate
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S')  # Last Updated
+                ]
+                self.analytics_sheet.append_row(new_row)
+            
+            logger.info(f"Analytics updated for enrollment in {campaign_id}")
         except Exception as e:
-            logger.error(f"⚠️  Error updating analytics: {e}")
+            logger.error(f"Error updating analytics enrollment: {e}")
 
     def _update_analytics_sent(self, campaign_id: str, message_number: int):
         """Update analytics when a message is sent"""
         try:
-            # Implementation for analytics update
-            # Will be completed in Task 1.9
-            pass
+            records = self.analytics_sheet.get_all_records()
+            row_idx = None
+            
+            for idx, record in enumerate(records, start=2):
+                if record.get('Campaign ID') == campaign_id:
+                    row_idx = idx
+                    break
+            
+            if row_idx:
+                # Update message sent count (columns 4, 5, 6 for msg 1, 2, 3)
+                col = 3 + message_number  # Column D=4 for msg1, E=5 for msg2, F=6 for msg3
+                current_sent = int(self.analytics_sheet.cell(row_idx, col).value or 0)
+                self.analytics_sheet.update_cell(row_idx, col, current_sent + 1)
+                self.analytics_sheet.update_cell(row_idx, 11, datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                logger.info(f"Analytics updated: Message {message_number} sent for {campaign_id}")
         except Exception as e:
-            logger.error(f"⚠️  Error updating analytics: {e}")
+            logger.error(f"Error updating analytics sent: {e}")
 
     def get_stats(self) -> Dict[str, Any]:
         """
@@ -571,16 +659,17 @@ class FollowUpManager:
     # CONDITION CHECKING LOGIC
     # ============================================================================
 
-    def check_lead_conditions(self, lead_data: Dict[str, Any]) -> List[str]:
+    def check_lead_conditions(self, lead_data: Dict[str, Any], lead_manager=None) -> List[str]:
         """
         Check which follow-up conditions a lead meets
 
         Args:
             lead_data: Dictionary with lead information from LeadManager
                       Expected keys: phone, name, interest, last_updated, last_visit
+            lead_manager: Optional LeadManager instance for warm_lead check
 
         Returns:
-            List of condition codes that match (e.g., ['no_response_72_hours', 'no_booking_168_hours'])
+            List of condition codes that match (e.g., ['no_response_72_hours', 'warm_lead'])
         """
         try:
             conditions_met = []
@@ -648,6 +737,30 @@ class FollowUpManager:
             if total_convs <= 2:
                 conditions_met.append('new_lead')
 
+            # 5. Check WARM LEAD condition (got recommendation but no booking)
+            # Requires lead_manager to check Conversation Insights + Bookings sheets
+            if lead_manager and hasattr(lead_manager, 'get_customer_context'):
+                try:
+                    context = lead_manager.get_customer_context(phone)
+                    if context.get('is_warm_lead'):
+                        # Check if enough time has passed (24 hours since last conversation)
+                        conv_info = context.get('conversation_info', {})
+                        last_updated_conv = conv_info.get('last_updated', '')
+                        if last_updated_conv:
+                            try:
+                                conv_time = datetime.strptime(last_updated_conv, '%Y-%m-%d %H:%M:%S')
+                                hours_since_conv = (datetime.now() - conv_time).total_seconds() / 3600
+                                if hours_since_conv >= 24:
+                                    conditions_met.append('warm_lead_24h')
+                                if hours_since_conv >= 48:
+                                    conditions_met.append('warm_lead_48h')
+                                if hours_since_conv >= 72:
+                                    conditions_met.append('warm_lead_72h')
+                            except ValueError:
+                                pass
+                except Exception as e:
+                    logger.warning(f"Could not check warm_lead condition: {e}")
+
             logger.info(f"📊 {phone} meets conditions: {conditions_met}")
             return conditions_met
 
@@ -699,7 +812,7 @@ class FollowUpManager:
                     continue
 
                 # Check which conditions this lead meets
-                conditions = self.check_lead_conditions(lead)
+                conditions = self.check_lead_conditions(lead, lead_manager)
 
                 if not conditions:
                     stats['skipped'] += 1
@@ -732,6 +845,102 @@ class FollowUpManager:
 
         except Exception as e:
             logger.error(f"❌ Error checking and enrolling leads: {e}")
+            return {'enrolled': 0, 'skipped': 0}
+
+
+
+    def check_warm_leads_from_insights(self, lead_manager) -> Dict[str, Any]:
+        """
+        Check Conversation Insights sheet for warm leads and enroll them.
+        This catches leads that might not be in Customer Record but have conversation data.
+
+        Args:
+            lead_manager: LeadManager instance
+
+        Returns:
+            Dictionary with enrollment stats
+        """
+        try:
+            logger.info("="*60)
+            logger.info("🔍 CHECKING WARM LEADS FROM CONVERSATION INSIGHTS")
+            logger.info("="*60)
+
+            if not hasattr(lead_manager, 'conversation_insights_sheet') or not lead_manager.conversation_insights_sheet:
+                logger.warning("Conversation Insights sheet not available")
+                return {'enrolled': 0, 'skipped': 0}
+
+            # Get active warm_lead campaigns
+            campaigns = self.get_active_campaigns()
+            warm_lead_campaigns = [c for c in campaigns if 'warm_lead' in c.get('Target Condition', '')]
+
+            if not warm_lead_campaigns:
+                logger.info("No warm_lead campaigns found - skipping")
+                return {'enrolled': 0, 'skipped': 0}
+
+            logger.info(f"Found {len(warm_lead_campaigns)} warm_lead campaigns")
+
+            # Get all conversation insights
+            insights = lead_manager.conversation_insights_sheet.get_all_records()
+            logger.info(f"Checking {len(insights)} conversation records")
+
+            stats = {'enrolled': 0, 'skipped': 0}
+
+            for insight in insights:
+                phone = insight.get('Phone', '')
+                if not phone:
+                    continue
+
+                # Check if already followed up
+                followup_status = insight.get('Followup Status', '')
+                if followup_status in ['Sent', 'Responded', 'Booked']:
+                    stats['skipped'] += 1
+                    continue
+
+                # Check warm lead status
+                context = lead_manager.get_customer_context(phone)
+                if not context.get('is_warm_lead'):
+                    stats['skipped'] += 1
+                    continue
+
+                # Check timing
+                last_updated = insight.get('Last Updated', '')
+                if not last_updated:
+                    continue
+
+                try:
+                    conv_time = datetime.strptime(last_updated, '%Y-%m-%d %H:%M:%S')
+                    hours_since = (datetime.now() - conv_time).total_seconds() / 3600
+                except ValueError:
+                    continue
+
+                # Match with campaigns
+                for campaign in warm_lead_campaigns:
+                    target = campaign.get('Target Condition', '')
+                    campaign_id = campaign.get('Campaign ID')
+
+                    # Check if hours match the campaign condition
+                    should_enroll = False
+                    if target == 'warm_lead_24h' and hours_since >= 24:
+                        should_enroll = True
+                    elif target == 'warm_lead_48h' and hours_since >= 48:
+                        should_enroll = True
+                    elif target == 'warm_lead_72h' and hours_since >= 72:
+                        should_enroll = True
+                    elif target == 'warm_lead' and hours_since >= 24:  # Default 24h
+                        should_enroll = True
+
+                    if should_enroll:
+                        if self.enroll_lead_in_campaign(phone, campaign_id):
+                            stats['enrolled'] += 1
+                            logger.info(f"Enrolled warm lead {phone} in {campaign_id}")
+                        else:
+                            stats['skipped'] += 1
+
+            logger.info(f"Warm lead check complete: enrolled={stats['enrolled']}, skipped={stats['skipped']}")
+            return stats
+
+        except Exception as e:
+            logger.error(f"Error checking warm leads: {e}")
             return {'enrolled': 0, 'skipped': 0}
 
     # ============================================================================

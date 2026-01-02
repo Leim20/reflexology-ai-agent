@@ -87,6 +87,16 @@ class LeadManager:
                 logger.warning("   Run scripts/setup_booking_sheet.py to create it")
                 self.bookings_sheet = None
 
+            # NEW: Conversation Insights sheet for tracking pain points and recommendations
+            try:
+                self.conversation_insights_sheet = self.spreadsheet.worksheet("Conversation Insights")
+                logger.info("Conversation Insights sheet found")
+            except gspread.WorksheetNotFound:
+                logger.warning("Conversation Insights sheet not found - tracking functions will not work")
+                logger.warning("   Run scripts/setup_conversation_insights_sheet.py to create it")
+                self.conversation_insights_sheet = None
+
+
             # Keep reference to main sheet for backward compatibility
             self.sheet = self.customer_sheet
 
@@ -1170,6 +1180,83 @@ Example: "Female therapist, 90min body massage, evening slots"
                 'row': None
             }
 
+    def _normalize_booking_date(self, date_str: str) -> str:
+        """Normalize date to YYYY-MM-DD format"""
+        import re
+        from datetime import timedelta
+
+        if not date_str:
+            return date_str
+
+        date_str = date_str.strip().lower()
+        today = datetime.now()
+
+        # Relative dates (all languages)
+        relative_today = ['今天', 'today', '今日', 'hari ini']
+        relative_tomorrow = ['明天', 'tomorrow', '明日', 'esok']
+        relative_day_after = ['后天', 'day after tomorrow', 'lusa']
+
+        if date_str in relative_today:
+            return today.strftime('%Y-%m-%d')
+        elif date_str in relative_tomorrow:
+            return (today + timedelta(days=1)).strftime('%Y-%m-%d')
+        elif date_str in relative_day_after:
+            return (today + timedelta(days=2)).strftime('%Y-%m-%d')
+
+        # Already YYYY-MM-DD
+        if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
+            return date_str
+
+        # Chinese: 2025年12月28日 or 12月28日
+        cn_full = re.match(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_str)
+        if cn_full:
+            y, m, d = cn_full.groups()
+            return f'{y}-{m.zfill(2)}-{d.zfill(2)}'
+
+        cn_short = re.match(r'(\d{1,2})月(\d{1,2})日', date_str)
+        if cn_short:
+            m, d = cn_short.groups()
+            return f'{today.year}-{m.zfill(2)}-{d.zfill(2)}'
+
+        return date_str
+
+    def _normalize_booking_time(self, time_str: str) -> str:
+        """Normalize time to HH:MM format"""
+        import re
+
+        if not time_str:
+            return time_str
+
+        time_str = time_str.strip()
+
+        # Already HH:MM
+        if re.match(r'^\d{1,2}:\d{2}$', time_str):
+            h, m = time_str.split(':')
+            return f'{h.zfill(2)}:{m}'
+
+        # 6:00 PM / 3:10 AM format
+        pm_match = re.match(r'(\d{1,2}):(\d{2})\s*(PM|AM)', time_str, re.IGNORECASE)
+        if pm_match:
+            h, m, period = pm_match.groups()
+            h = int(h)
+            if period.upper() == 'PM' and h != 12:
+                h += 12
+            elif period.upper() == 'AM' and h == 12:
+                h = 0
+            return f'{h:02d}:{m}'
+
+        # Chinese: 下午3点10分 / 晚上8点
+        cn_match = re.match(r'(上午|下午|晚上|早上)?(\d{1,2})[点时](?:(\d{1,2})分?)?', time_str)
+        if cn_match:
+            period, h, m = cn_match.groups()
+            h = int(h)
+            m = int(m) if m else 0
+            if period in ['下午', '晚上'] and h < 12:
+                h += 12
+            return f'{h:02d}:{m:02d}'
+
+        return time_str
+
     def record_booking(
         self,
         customer_name: str,
@@ -1181,83 +1268,103 @@ Example: "Female therapist, 90min body massage, evening slots"
         therapist_gender: str
     ) -> Dict[str, Any]:
         """
-        Record a confirmed booking to the Bookings sheet
-
-        Args:
-            customer_name: Customer's name
-            customer_gender: Male/Female
-            customer_phone: Customer's phone number
-            booking_date: Date of appointment
-            booking_time: Time of appointment
-            service: Service type and duration
-            therapist_gender: Male/Female therapist
-
-        Returns:
-            dict: {
-                'success': bool,
-                'message': str,
-                'row': int (row number where booking was recorded)
-            }
+        Record a confirmed booking to the Bookings sheet.
+        - Normalizes date/time to standard format
+        - Updates existing booking if same phone+date exists
         """
         logger.info("="*80)
-        logger.info("?? RECORDING BOOKING TO GOOGLE SHEETS")
+        logger.info("RECORDING BOOKING TO GOOGLE SHEETS")
         logger.info("="*80)
 
         if not self.bookings_sheet:
-            logger.error("? Bookings sheet not initialized")
+            logger.error("Bookings sheet not initialized")
             return {
                 'success': False,
-                'message': 'Bookings sheet not found. Run scripts/setup_booking_sheet.py'
+                'message': 'Bookings sheet not found'
             }
 
         try:
-            # Get current timestamp
+            # Normalize date and time
+            normalized_date = self._normalize_booking_date(booking_date)
+            normalized_time = self._normalize_booking_time(booking_time)
             timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-            # Prepare booking data
-            booking_data = [
-                customer_name,
-                customer_gender,
-                customer_phone,
-                booking_date,
-                booking_time,
-                service,
-                therapist_gender,
-                timestamp
-            ]
 
             logger.info(f"Name: {customer_name}")
             logger.info(f"Gender: {customer_gender}")
             logger.info(f"Phone: {customer_phone}")
-            logger.info(f"Date: {booking_date}")
-            logger.info(f"Time: {booking_time}")
+            logger.info(f"Date: {booking_date} -> {normalized_date}")
+            logger.info(f"Time: {booking_time} -> {normalized_time}")
             logger.info(f"Service: {service}")
             logger.info(f"Therapist: {therapist_gender}")
 
-            # Append to sheet
-            logger.info("Appending to Bookings sheet...")
-            self.bookings_sheet.append_row(booking_data)
-
-            # Get the row number
+            # Check for existing booking (same phone + same date) to UPDATE
             all_records = self.bookings_sheet.get_all_values()
-            row_number = len(all_records)
+            existing_row = None
+            existing_data = None
 
-            logger.info(f"? Booking recorded successfully at row {row_number}")
+            for i, row in enumerate(all_records[1:], start=2):  # Skip header
+                if len(row) >= 4:
+                    row_phone = row[2].strip() if row[2] else ''
+                    row_date = row[3].strip() if row[3] else ''
+                    row_date_normalized = self._normalize_booking_date(row_date)
+
+                    if row_phone == customer_phone and row_date_normalized == normalized_date:
+                        existing_row = i
+                        existing_data = row
+                        logger.info(f"Found existing booking at row {i} - will UPDATE")
+                        break
+
+            if existing_row:
+                # UPDATE existing booking (preserve fields if new value is empty/Unknown)
+                updated_name = customer_name if customer_name and customer_name != 'Unknown' else (existing_data[0] if existing_data else customer_name)
+                updated_gender = customer_gender if customer_gender and customer_gender != 'Unknown' else (existing_data[1] if len(existing_data) > 1 else customer_gender)
+                updated_therapist = therapist_gender if therapist_gender and therapist_gender != 'Unknown' else (existing_data[6] if len(existing_data) > 6 else therapist_gender)
+
+                self.bookings_sheet.update(f'A{existing_row}:H{existing_row}', [[
+                    updated_name,
+                    updated_gender,
+                    customer_phone,
+                    normalized_date,
+                    normalized_time,
+                    service,
+                    updated_therapist,
+                    timestamp
+                ]])
+                row_number = existing_row
+                action = 'updated'
+            else:
+                # INSERT new booking
+                booking_data = [
+                    customer_name,
+                    customer_gender,
+                    customer_phone,
+                    normalized_date,
+                    normalized_time,
+                    service,
+                    therapist_gender,
+                    timestamp
+                ]
+                self.bookings_sheet.append_row(booking_data)
+                all_records = self.bookings_sheet.get_all_values()
+                row_number = len(all_records)
+                action = 'created'
+
+            logger.info(f"Booking {action} successfully at row {row_number}")
             logger.info("="*80)
 
             return {
                 'success': True,
-                'message': 'Booking recorded successfully',
-                'row': row_number
+                'message': f'Booking {action} successfully',
+                'row': row_number,
+                'action': action
             }
 
         except Exception as e:
-            logger.error(f"? Failed to record booking: {str(e)}")
+            logger.error(f"Failed to record booking: {str(e)}")
             logger.exception("Full error traceback:")
-            logger.info("="*80)
             return {
                 'success': False,
-                'message': f'Error recording booking: {str(e)}'
+                'message': f'Error: {str(e)}'
             }
 
     def get_bookings(self, customer_phone: str) -> Dict[str, Any]:
@@ -1333,3 +1440,343 @@ Example: "Female therapist, 90min body massage, evening slots"
                 'count': 0,
                 'message': f'Error searching bookings: {str(e)}'
             }
+
+    def track_conversation_info(
+        self,
+        customer_phone: str,
+        customer_name: str,
+        pain_points: str,
+        recommendations: str
+    ) -> Dict[str, Any]:
+        """
+        Track customer pain points and recommendations to Conversation Insights sheet.
+        Called after STEP 3 in the 5-step framework.
+        """
+        logger.info("="*80)
+        logger.info("TRACKING CONVERSATION INFO TO GOOGLE SHEETS")
+        logger.info("="*80)
+
+        if not self.conversation_insights_sheet:
+            logger.error("Conversation Insights sheet not initialized")
+            return {
+                "success": False,
+                "message": "Conversation Insights sheet not found",
+                "action": "failed"
+            }
+
+        try:
+            normalized_phone = customer_phone.replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            existing_row = None
+            try:
+                throttle_if_busy()
+                all_values = self.conversation_insights_sheet.get_all_values()
+                track_api_call()
+                
+                for idx, row in enumerate(all_values[1:], start=2):
+                    if len(row) > 0:
+                        row_phone = row[0].replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
+                        if row_phone == normalized_phone:
+                            existing_row = idx
+                            break
+            except Exception as e:
+                logger.warning(f"Could not check for existing entry: {e}")
+
+            if existing_row:
+                logger.info(f"Updating existing entry at row {existing_row}")
+                from gspread import Cell
+                cells_to_update = [
+                    Cell(existing_row, 2, customer_name),
+                    Cell(existing_row, 3, pain_points),
+                    Cell(existing_row, 4, recommendations),
+                    Cell(existing_row, 5, timestamp)
+                ]
+                throttle_if_busy()
+                self.conversation_insights_sheet.update_cells(cells_to_update)
+                track_api_call()
+                
+                cache_key = f"conversation_insights:{normalized_phone}"
+                self.cache_manager.invalidate(cache_key)
+                
+                return {
+                    "success": True,
+                    "message": "Conversation info updated successfully",
+                    "action": "updated",
+                    "row": existing_row
+                }
+            else:
+                logger.info("Creating new conversation insights entry")
+                new_row = [
+                    normalized_phone,
+                    customer_name,
+                    pain_points,
+                    recommendations,
+                    timestamp
+                ]
+                
+                logger.info(f"Phone: {normalized_phone}")
+                logger.info(f"Name: {customer_name}")
+                logger.info(f"Pain Points: {pain_points}")
+                logger.info(f"Recommendations: {recommendations}")
+                
+                throttle_if_busy()
+                self.conversation_insights_sheet.append_row(new_row)
+                track_api_call()
+                
+                row_number = None
+                try:
+                    all_records = self.conversation_insights_sheet.get_all_values()
+                    row_number = len(all_records)
+                except Exception:
+                    pass
+                
+                logger.info(f"Conversation info recorded at row {row_number}")
+                return {
+                    "success": True,
+                    "message": "Conversation info recorded successfully",
+                    "action": "created",
+                    "row": row_number
+                }
+
+        except Exception as e:
+            logger.error(f"Failed to track conversation info: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error tracking conversation info: {str(e)}",
+                "action": "failed"
+            }
+
+    def get_customer_context(self, phone: str) -> Dict[str, Any]:
+        """
+        Get complete customer context from all sheets.
+        Used for warm lead detection and personalized responses.
+        """
+        logger.info("="*80)
+        logger.info(f"GETTING CUSTOMER CONTEXT FOR: {phone}")
+        logger.info("="*80)
+
+        normalized_phone = phone.replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
+
+        result = {
+            "success": True,
+            "conversation_info": None,
+            "booking_record": None,
+            "member_info": None,
+            "is_warm_lead": False
+        }
+
+        if self.conversation_insights_sheet:
+            try:
+                cache_key = f"conversation_insights:{normalized_phone}"
+                cached = self.cache_manager.get(cache_key)
+                
+                if cached is not None:
+                    result["conversation_info"] = cached
+                    logger.info(f"Conversation info from cache")
+                else:
+                    throttle_if_busy()
+                    all_values = self.conversation_insights_sheet.get_all_values()
+                    track_api_call()
+                    
+                    for row in all_values[1:]:
+                        if len(row) > 0:
+                            row_phone = row[0].replace("+", "").replace("-", "").replace(" ", "").replace("@s.whatsapp.net", "")
+                            if row_phone == normalized_phone:
+                                info = {
+                                    "phone": row[0] if len(row) > 0 else "",
+                                    "name": row[1] if len(row) > 1 else "",
+                                    "pain_points": row[2] if len(row) > 2 else "",
+                                    "recommendations": row[3] if len(row) > 3 else "",
+                                    "last_updated": row[4] if len(row) > 4 else ""
+                                }
+                                result["conversation_info"] = info
+                                self.cache_manager.set(cache_key, info, ttl=300)
+                                logger.info(f"Conversation info found")
+                                break
+            except Exception as e:
+                logger.warning(f"Could not fetch conversation insights: {e}")
+
+        if self.bookings_sheet:
+            try:
+                bookings_result = self.get_bookings(normalized_phone)
+                if bookings_result.get("success") and bookings_result.get("count", 0) > 0:
+                    result["booking_record"] = bookings_result.get("bookings", [])[0]
+                    logger.info(f"Booking found")
+            except Exception as e:
+                logger.warning(f"Could not fetch bookings: {e}")
+
+        if self.members_sheet:
+            try:
+                member = self.get_member_by_phone(normalized_phone)
+                if member:
+                    result["member_info"] = member
+                    logger.info(f"Member info found")
+            except Exception as e:
+                logger.warning(f"Could not fetch member info: {e}")
+
+        if result["conversation_info"] is not None and result["booking_record"] is None:
+            result["is_warm_lead"] = True
+            logger.info("Customer is a WARM LEAD")
+
+        logger.info(f"Customer context complete: warm_lead={result['is_warm_lead']}")
+        logger.info("="*80)
+
+        return result
+
+    def get_upcoming_bookings_for_reminder(self, minutes_before: int = 60) -> List[Dict[str, Any]]:
+        """
+        Get bookings that are coming up within the specified minutes and need reminders.
+
+        Args:
+            minutes_before: How many minutes before appointment to send reminder (default 60)
+
+        Returns:
+            List of booking dicts that need reminders
+        """
+        logger.info("="*80)
+        logger.info(f"CHECKING FOR UPCOMING BOOKINGS (within {minutes_before} minutes)")
+        logger.info("="*80)
+
+        if not self.bookings_sheet:
+            logger.warning("Bookings sheet not available")
+            return []
+
+        try:
+            from datetime import datetime, timedelta
+
+            now = datetime.now()
+            today_str = now.strftime('%Y-%m-%d')
+
+            # Get all bookings
+            throttle_if_busy()
+            all_bookings = self.bookings_sheet.get_all_records()
+            track_api_call()
+
+            upcoming = []
+
+            for idx, booking in enumerate(all_bookings, start=2):  # Start at row 2 (skip header)
+                booking_date = str(booking.get('Booking Date', ''))
+                booking_time = str(booking.get('Booking Time', ''))
+                reminder_sent = str(booking.get('Reminder Sent', ''))
+
+                # Skip if reminder already sent
+                if reminder_sent and reminder_sent.lower() not in ['', 'no', 'false']:
+                    continue
+
+                # Skip if not today
+                if booking_date != today_str:
+                    continue
+
+                # Parse booking time
+                try:
+                    # Handle various time formats
+                    booking_time_clean = booking_time.replace('.', ':').strip()
+
+                    # Try different formats
+                    booking_datetime = None
+                    for fmt in ['%H:%M', '%H:%M:%S', '%I:%M %p', '%I:%M%p']:
+                        try:
+                            time_obj = datetime.strptime(booking_time_clean, fmt)
+                            booking_datetime = now.replace(
+                                hour=time_obj.hour,
+                                minute=time_obj.minute,
+                                second=0,
+                                microsecond=0
+                            )
+                            break
+                        except ValueError:
+                            continue
+
+                    if not booking_datetime:
+                        logger.warning(f"Could not parse booking time: {booking_time}")
+                        continue
+
+                    # Calculate minutes until appointment
+                    time_diff = booking_datetime - now
+                    minutes_until = time_diff.total_seconds() / 60
+
+                    # Check if within reminder window (30-60 minutes before)
+                    # Send reminder if appointment is 30-60 minutes away
+                    if 1 <= minutes_until <= minutes_before:
+                        booking['row'] = idx
+                        booking['minutes_until'] = int(minutes_until)
+                        booking['booking_datetime'] = booking_datetime.strftime('%Y-%m-%d %H:%M')
+                        upcoming.append(booking)
+                        logger.info(f"Found upcoming booking: {booking.get('Name')} at {booking_time} ({int(minutes_until)} min away)")
+
+                except Exception as e:
+                    logger.warning(f"Error parsing booking time '{booking_time}': {e}")
+                    continue
+
+            logger.info(f"Found {len(upcoming)} bookings needing reminders")
+            logger.info("="*80)
+
+            return upcoming
+
+        except Exception as e:
+            logger.error(f"Error getting upcoming bookings: {e}")
+            return []
+
+    def mark_reminder_sent(self, row: int) -> bool:
+        """
+        Mark a booking as reminder sent.
+
+        Args:
+            row: Row number in the Bookings sheet
+
+        Returns:
+            True if successful
+        """
+        try:
+            from datetime import datetime
+
+            timestamp = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+            throttle_if_busy()
+            self.bookings_sheet.update_cell(row, 9, timestamp)  # Column I = Reminder Sent
+            track_api_call()
+
+            logger.info(f"Marked reminder sent for row {row}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error marking reminder sent: {e}")
+            return False
+
+    def get_booking_reminder_message(self, booking: Dict[str, Any]) -> str:
+        """
+        Generate a personalized booking reminder message.
+
+        Args:
+            booking: Booking dictionary with Name, Service, Booking Time, etc.
+
+        Returns:
+            Reminder message string
+        """
+        name = booking.get('Name', '')
+        service = booking.get('Service', '')
+        booking_time = booking.get('Booking Time', '')
+
+        # Get branch address from config
+        try:
+            from core.config_loader import load_config
+            config = load_config()
+            branch_contact = config.get('branch_contact', {})
+            address = branch_contact.get('address', '')
+        except:
+            address = ''
+
+        # Build message
+        if name and name != 'Unknown':
+            greeting = f"Hi {name}!"
+        else:
+            greeting = "Hi!"
+
+        message = f"""{greeting} 温馨提醒您今天 {booking_time} 有预约 {service} 😊
+
+地址：{address}
+
+期待您的光临～有任何问题随时联系我们！"""
+
+        return message.strip()
