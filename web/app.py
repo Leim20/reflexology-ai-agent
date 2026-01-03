@@ -1411,7 +1411,7 @@ def get_lookup_my_bookings_function_definition():
         "type": "function",
         "function": {
             "name": "lookup_my_bookings",
-            "description": "Check customer booking history and records. MUST USE this when customer asks about: their bookings, appointments, reservations, last massage, previous visit, 上一次按摩, 我的预约, booking history, when did I come, past visits. This automatically uses the customer phone number - do NOT ask them for their phone number.",
+            "description": "Refresh customer booking data. Only use this if: (1) customer says their booking info seems wrong or outdated, (2) customer mentions a recent booking not shown in their history, or (3) customer explicitly asks to check again. The booking history is already pre-loaded - do NOT call this for normal booking questions.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -1431,7 +1431,7 @@ def get_check_my_membership_function_definition():
         "type": "function",
         "function": {
             "name": "check_my_membership",
-            "description": "Check if the customer is a registered member and get their membership details (points, birthday, etc). Use this when customer asks about their membership status, points balance, or member benefits. This automatically uses the customer phone number - do NOT ask them for their phone number.",
+            "description": "Refresh customer membership data. Only use this if customer says their membership info seems wrong or outdated. Membership status is already pre-loaded - do NOT call this for normal membership questions.",
             "parameters": {
                 "type": "object",
                 "properties": {},
@@ -1441,6 +1441,127 @@ def get_check_my_membership_function_definition():
     }
 
 
+
+
+
+def pre_fetch_customer_bookings(phone: str, customer_name: str = None) -> dict:
+    """
+    Pre-fetch customer booking data for session context.
+    Called once when new session is created.
+    """
+    from datetime import datetime
+
+    result = {
+        "found": False,
+        "last_visit": None,
+        "upcoming": [],
+        "past": [],
+        "total_count": 0
+    }
+
+    try:
+        if not lead_manager:
+            return result
+
+        bookings_result = lead_manager.get_bookings(phone)
+
+        if not bookings_result.get("success") or bookings_result.get("count", 0) == 0:
+            return result
+
+        all_bookings = bookings_result.get("bookings", [])
+
+        # Filter by customer name if provided (case-insensitive)
+        if customer_name:
+            filtered = [b for b in all_bookings if b.get("Name", "").lower() == customer_name.lower()]
+            if filtered:
+                all_bookings = filtered
+
+        if not all_bookings:
+            return result
+
+        today = datetime.now().date()
+
+        for b in all_bookings:
+            try:
+                booking_date_str = str(b.get("Booking Date", ""))
+                if not booking_date_str:
+                    result["past"].append(b)
+                    continue
+
+                booking_date = datetime.strptime(booking_date_str, "%Y-%m-%d").date()
+                if booking_date >= today:
+                    result["upcoming"].append(b)
+                else:
+                    result["past"].append(b)
+            except:
+                result["past"].append(b)
+
+        # Sort past bookings by date (most recent first)
+        result["past"].sort(key=lambda x: x.get("Booking Date", ""), reverse=True)
+        result["upcoming"].sort(key=lambda x: x.get("Booking Date", ""))
+
+        # Get last visit
+        if result["past"]:
+            last = result["past"][0]
+            result["last_visit"] = {
+                "date": last.get("Booking Date", "Unknown"),
+                "time": last.get("Booking Time", ""),
+                "service": last.get("Service", "Unknown service")
+            }
+
+        result["found"] = True
+        result["total_count"] = len(all_bookings)
+
+        logger.info(f"Pre-fetched bookings for {phone}: {len(result['past'])} past, {len(result['upcoming'])} upcoming")
+
+    except Exception as e:
+        logger.error(f"Error pre-fetching bookings: {e}")
+
+    return result
+
+
+def format_booking_context(booking_data: dict) -> str:
+    """
+    Format pre-fetched booking data as context for system prompt.
+    """
+    if not booking_data.get("found"):
+        return """
+===== CUSTOMER BOOKING HISTORY =====
+No booking records found for this customer.
+If they ask about bookings, offer to help them make a new booking.
+====================================
+"""
+
+    lines = ["", "===== CUSTOMER BOOKING HISTORY ====="]
+
+    # Last visit
+    if booking_data.get("last_visit"):
+        lv = booking_data["last_visit"]
+        lines.append(f"Last Visit: {lv['date']}, {lv['time']}, {lv['service']}")
+    else:
+        lines.append("Last Visit: None on record")
+
+    # Upcoming bookings
+    upcoming = booking_data.get("upcoming", [])
+    if upcoming:
+        lines.append(f"Upcoming Bookings: {len(upcoming)}")
+        for i, b in enumerate(upcoming[:3]):
+            lines.append(f"  - {b.get('Booking Date', '?')} {b.get('Booking Time', '')}: {b.get('Service', '?')}")
+    else:
+        lines.append("Upcoming Bookings: None")
+
+    # Past bookings count
+    past_count = len(booking_data.get("past", []))
+    lines.append(f"Past Bookings: {past_count}")
+
+    # Instructions
+    lines.append("")
+    lines.append("IMPORTANT: Use ONLY this data when customer asks about their bookings.")
+    lines.append("Do NOT make up or guess booking information.")
+    lines.append("If customer says data seems wrong, call lookup_my_bookings() to refresh.")
+    lines.append("====================================")
+
+    return "\n".join(lines)
 
 def send_booking_notification(
     customer_name: str,
@@ -2702,6 +2823,19 @@ IMPORTANT: This customer is ALREADY a member!
                     logger.error(f"Error checking member status: {e}")
             # ===================================================================
 
+            # ===================================================================
+            # BOOKING HISTORY INJECTION - Pre-fetch customer booking data
+            # ===================================================================
+            try:
+                customer_phone_clean = sender.replace('@s.whatsapp.net', '')
+                booking_data = pre_fetch_customer_bookings(customer_phone_clean, from_name)
+                booking_context = format_booking_context(booking_data)
+                system_prompt += booking_context
+                logger.info(f"Pre-fetched booking data: {booking_data.get('total_count', 0)} bookings")
+            except Exception as e:
+                logger.error(f"Error pre-fetching booking data: {e}")
+            # ===================================================================
+
             conversation_manager.create_session(session_id, system_prompt)
 
         # Process message based on type
@@ -3155,6 +3289,11 @@ INSTRUCTIONS:
                         whatsapp_phone=sender
                     )
 
+                    # Clear session to refresh member data on next message
+                    if registration_result.get("success"):
+                        conversation_manager.clear_session(session_id)
+                        logger.info("Session cleared after registration - will refresh data")
+
                     function_results.append({
                         "tool_call_id": tool_call['id'],
                         "role": "tool",
@@ -3184,6 +3323,11 @@ INSTRUCTIONS:
                     booking_result = handle_record_booking_function_call(
                         function_args=function_args
                     )
+
+                    # Clear session to refresh booking data on next message
+                    if booking_result.get("success"):
+                        conversation_manager.clear_session(session_id)
+                        logger.info("Session cleared after booking - will refresh data")
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],
