@@ -9,6 +9,7 @@ import time
 import random
 import hashlib
 import json
+import re
 import mimetypes
 from typing import Dict, Optional
 import requests
@@ -203,6 +204,78 @@ def detect_language(message: str) -> str:
     
     # Otherwise, default to English
     return "english"
+
+
+def parse_menu_call_language(ai_response: str) -> Optional[str]:
+    """
+    Parse AI response for [CALL send_menu_image(language="xxx")] pattern
+    and extract the language parameter.
+    
+    This allows AI to determine menu language instead of static detection.
+    
+    Args:
+        ai_response: The AI response text
+        
+    Returns:
+        str or None: Extracted language ("chinese", "english", "malay") or None if not found
+    """
+    if not ai_response:
+        return None
+    
+    # Pattern matches various formats AI might output
+    patterns = [
+        r'\[CALL\s+send_menu_image\s*\(\s*language\s*=\s*["\'](\w+)["\']\s*\)\s*\]',
+        r'CALL\s+send_menu_image\s*\(\s*language\s*=\s*["\'](\w+)["\']\s*\)',
+        r'send_menu_image\s*\(\s*language\s*=\s*["\'](\w+)["\']\s*\)',
+    ]
+    
+    for pattern in patterns:
+        match = re.search(pattern, ai_response, re.IGNORECASE)
+        if match:
+            language = match.group(1).lower()
+            if language in ["chinese", "english", "malay"]:
+                logger.info(f"Parsed menu language from AI response: {language}")
+                return language
+    
+    return None
+
+
+def clean_menu_call_from_response(ai_response: str) -> str:
+    """
+    Remove [CALL send_menu_image(...)] text from AI response before sending to user.
+    
+    The function call syntax should never be visible to customers.
+    
+    Args:
+        ai_response: The AI response text
+        
+    Returns:
+        str: Cleaned response with [CALL...] removed
+    """
+    if not ai_response:
+        return ai_response
+    
+    # Patterns to remove
+    patterns_to_remove = [
+        r'\[CALL\s+send_menu_image\s*\([^\)]*\)\s*\]',
+        r'CALL\s+send_menu_image\s*\([^\)]*\)',
+        r'\[send_menu_image\s*\([^\)]*\)\]',
+    ]
+    
+    cleaned = ai_response
+    for pattern in patterns_to_remove:
+        cleaned = re.sub(pattern, "", cleaned, flags=re.IGNORECASE)
+    
+    # Clean up extra whitespace
+    cleaned = re.sub(r'\n\s*\n', '\n', cleaned)
+    cleaned = re.sub(r'  +', ' ', cleaned)
+    cleaned = cleaned.strip()
+    
+    if cleaned != ai_response:
+        logger.info("Removed [CALL send_menu_image(...)] from AI response")
+    
+    return cleaned
+
 
 
 # ============================================================================
@@ -815,48 +888,56 @@ def check_and_send_broadcasts_job():
     """
     Scheduler job: Check for scheduled broadcasts and send them
     Runs every 1 minute
+    Supports both text and image broadcasts
     """
     try:
         if not broadcast_manager or not whatsapp_handler:
             return
 
-        logger.debug("🔄 [SCHEDULER] Checking for pending broadcasts...")
+        logger.debug("[SCHEDULER] Checking for pending broadcasts...")
 
-        # Get all broadcasts ready to send
         pending_broadcasts = broadcast_manager.get_pending_broadcasts()
 
         if not pending_broadcasts:
             logger.debug("   No pending broadcasts")
             return
 
-        logger.info(f"📢 [SCHEDULER] Found {len(pending_broadcasts)} broadcasts ready to send")
+        logger.info(f"[SCHEDULER] Found {len(pending_broadcasts)} broadcasts ready to send")
 
-        # Send each broadcast
         for broadcast in pending_broadcasts:
-            broadcast_id = broadcast.get('Broadcast ID', 'UNKNOWN')
-            title = broadcast.get('Title', 'Untitled')
+            broadcast_id = broadcast.get("Broadcast ID", "UNKNOWN")
+            title = broadcast.get("Title", "Untitled")
 
-            logger.info(f"📤 [SCHEDULER] Sending broadcast: {broadcast_id} - {title}")
+            logger.info(f"[SCHEDULER] Sending broadcast: {broadcast_id} - {title}")
 
-            # Define send function to pass to broadcast_manager
             def send_whatsapp_message(phone: str, message: str) -> bool:
-                """Helper function to send WhatsApp message"""
                 try:
                     result = whatsapp_handler.send_message(to=phone, message=message)
-                    return result.get('success', False)
+                    return result.get("success", False)
                 except Exception as e:
-                    logger.error(f"❌ Error sending WhatsApp message to {phone}: {e}")
+                    logger.error(f"Error sending WhatsApp message to {phone}: {e}")
                     return False
 
-            # Send broadcast to all recipients
-            stats = broadcast_manager.send_broadcast(broadcast, send_whatsapp_message)
+            def send_whatsapp_image(phone: str, image_url: str, caption: str = "") -> bool:
+                try:
+                    result = whatsapp_handler.send_image(to=phone, image_url=image_url, caption=caption)
+                    return result.get("success", False)
+                except Exception as e:
+                    logger.error(f"Error sending WhatsApp image to {phone}: {e}")
+                    return False
 
-            logger.info(f"✅ [SCHEDULER] Broadcast {broadcast_id} sent:")
+            stats = broadcast_manager.send_broadcast(
+                broadcast=broadcast,
+                send_text_function=send_whatsapp_message,
+                send_image_function=send_whatsapp_image
+            )
+
+            logger.info(f"[SCHEDULER] Broadcast {broadcast_id} sent:")
             logger.info(f"   Delivered: {stats.get('sent', 0)}/{stats.get('total', 0)}")
             logger.info(f"   Failed: {stats.get('failed', 0)}/{stats.get('total', 0)}")
 
     except Exception as e:
-        logger.error(f"❌ [SCHEDULER] Error in check_and_send_broadcasts_job: {e}")
+        logger.error(f"[SCHEDULER] Error in check_and_send_broadcasts_job: {e}")
 
 
 # Initialize app on module load
@@ -3250,6 +3331,9 @@ INSTRUCTIONS:
         # Check if AI wants to call escalation function
         tool_calls = ai_response.get('tool_calls')
 
+        # Variable to store AI-parsed menu language (prioritized over static detection)
+        ai_parsed_language = None
+
         if tool_calls:
             logger.info("="*80)
             logger.info("🔧 AI IS CALLING FUNCTION(S)")
@@ -3481,9 +3565,18 @@ INSTRUCTIONS:
 
             assistant_message = final_response['content']
 
+            # Parse AI language choice and clean [CALL ...] from response
+            ai_parsed_language = parse_menu_call_language(assistant_message)
+            assistant_message = clean_menu_call_from_response(assistant_message)
+
         else:
             # No function call, use AI's text response directly
             assistant_message = ai_response['content']
+
+        # Parse AI language choice and clean [CALL ...] from response
+        if not ai_parsed_language:
+            ai_parsed_language = parse_menu_call_language(assistant_message)
+        assistant_message = clean_menu_call_from_response(assistant_message)
 
         # Keyword fallback: send menu image if AI didn't call the tool
         if menu_request_detected and not menu_image_sent and menu_config.get('enabled', False):
@@ -3492,9 +3585,9 @@ INSTRUCTIONS:
             logger.info("=" * 80)
 
             fallback_result = handle_send_menu_image_function_call(
-                function_args={"language": menu_language},
+                function_args={"language": ai_parsed_language or menu_language},
                 sender=sender,
-                language_hint=menu_language,
+                language_hint=ai_parsed_language or menu_language,
                 conversation_id=chatwoot_conversation_id
             )
 
