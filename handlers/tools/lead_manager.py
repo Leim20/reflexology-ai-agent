@@ -96,6 +96,14 @@ class LeadManager:
                 logger.warning("   Run scripts/setup_conversation_insights_sheet.py to create it")
                 self.conversation_insights_sheet = None
 
+            # NEW: Cancellation Log sheet for tracking cancellation reasons
+            try:
+                self.cancellation_log_sheet = self.spreadsheet.worksheet("Cancellation Log")
+                logger.info("✓ Cancellation Log sheet found")
+            except gspread.WorksheetNotFound:
+                logger.warning("⚠️ Cancellation Log sheet not found - cancellation logging will not work")
+                logger.warning("   Run scripts/setup_cancellation_log_sheet.py to create it")
+                self.cancellation_log_sheet = None
 
             # Keep reference to main sheet for backward compatibility
             self.sheet = self.customer_sheet
@@ -1780,3 +1788,102 @@ Example: "Female therapist, 90min body massage, evening slots"
 期待您的光临～有任何问题随时联系我们！"""
 
         return message.strip()
+
+    def log_cancellation_reason(
+        self,
+        customer_phone: str,
+        cancellation_reason: str,
+        outcome: str,
+        original_booking_date: str = "",
+        original_booking_time: str = "",
+        notes: str = ""
+    ) -> Dict[str, Any]:
+        """
+        Log a cancellation or reschedule event to the Cancellation Log sheet.
+
+        Args:
+            customer_phone: Customer's phone number
+            cancellation_reason: Reason for cancellation (busy, health, budget, reschedule, other)
+            outcome: Outcome of the cancellation (rescheduled, cancelled)
+            original_booking_date: Original booking date (optional)
+            original_booking_time: Original booking time (optional)
+            notes: Additional notes (optional)
+
+        Returns:
+            Dict with success status and message
+        """
+        logger.info("="*80)
+        logger.info("LOGGING CANCELLATION TO GOOGLE SHEETS")
+        logger.info("="*80)
+
+        if not self.cancellation_log_sheet:
+            logger.error("Cancellation Log sheet not initialized")
+            return {
+                'success': False,
+                'message': 'Cancellation Log sheet not found. Run setup_cancellation_log_sheet.py to create it.'
+            }
+
+        try:
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+            # Normalize phone
+            normalized_phone = customer_phone.replace('+', '').replace('-', '').replace(' ', '').replace('@s.whatsapp.net', '')
+
+            # Try to get customer name from booking or customer record
+            customer_name = "Unknown"
+            try:
+                # First try to find from bookings
+                if self.bookings_sheet:
+                    all_bookings = self.bookings_sheet.get_all_values()
+                    for row in all_bookings[1:]:  # Skip header
+                        if len(row) >= 3:
+                            row_phone = row[2].replace('+', '').replace('-', '').replace(' ', '')
+                            if row_phone == normalized_phone:
+                                customer_name = row[0] if row[0] else "Unknown"
+                                break
+            except Exception as e:
+                logger.warning(f"Could not fetch customer name: {e}")
+
+            logger.info(f"Phone: {normalized_phone}")
+            logger.info(f"Name: {customer_name}")
+            logger.info(f"Reason: {cancellation_reason}")
+            logger.info(f"Outcome: {outcome}")
+            logger.info(f"Original Date: {original_booking_date}")
+            logger.info(f"Original Time: {original_booking_time}")
+            logger.info(f"Notes: {notes}")
+
+            # Prepare row data
+            # Columns: Phone | Name | Original Date | Original Time | Reason | Outcome | Notes | Timestamp
+            row_data = [
+                normalized_phone,
+                customer_name,
+                original_booking_date,
+                original_booking_time,
+                cancellation_reason,
+                outcome,
+                notes,
+                timestamp
+            ]
+
+            # Append to sheet
+            throttle_if_busy()
+            self.cancellation_log_sheet.append_row(row_data)
+            track_api_call()
+
+            logger.info("✅ Cancellation logged successfully")
+
+            return {
+                'success': True,
+                'message': f'Cancellation logged: {cancellation_reason} -> {outcome}',
+                'customer_phone': normalized_phone,
+                'customer_name': customer_name,
+                'reason': cancellation_reason,
+                'outcome': outcome
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error logging cancellation: {e}")
+            return {
+                'success': False,
+                'message': str(e)
+            }

@@ -1522,6 +1522,97 @@ def get_check_my_membership_function_definition():
     }
 
 
+# ============================================================================
+# FUNCTION CALLING - LOG CANCELLATION REASON
+# ============================================================================
+
+def get_log_cancellation_reason_function_definition():
+    """Define log_cancellation_reason function for OpenAI function calling"""
+    return {
+        "type": "function",
+        "function": {
+            "name": "log_cancellation_reason",
+            "description": "Log the reason when a customer cancels or reschedules their booking. Call this AFTER the cancellation conversation is complete to record the reason and outcome for analytics.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "customer_phone": {
+                        "type": "string",
+                        "description": "Customer phone number"
+                    },
+                    "original_booking_date": {
+                        "type": "string",
+                        "description": "The original date of the booking that was cancelled (YYYY-MM-DD or as mentioned)"
+                    },
+                    "original_booking_time": {
+                        "type": "string",
+                        "description": "The original time of the booking that was cancelled"
+                    },
+                    "cancellation_reason": {
+                        "type": "string",
+                        "enum": ["busy", "health", "budget", "reschedule", "other"],
+                        "description": "The reason for cancellation: busy (有事/临时不得空), health (身体不舒服/生病), budget (预算/钱), reschedule (改时间), other (其他原因)"
+                    },
+                    "outcome": {
+                        "type": "string",
+                        "enum": ["rescheduled", "cancelled"],
+                        "description": "The outcome: rescheduled (customer changed to new time) or cancelled (booking fully cancelled)"
+                    },
+                    "notes": {
+                        "type": "string",
+                        "description": "Brief notes about what happened (optional)"
+                    }
+                },
+                "required": ["customer_phone", "cancellation_reason", "outcome"]
+            }
+        }
+    }
+
+
+def handle_log_cancellation_reason_function_call(function_args: dict, whatsapp_phone: str = None) -> dict:
+    """Handle the log_cancellation_reason function call"""
+    logger.info("="*80)
+    logger.info("LOGGING CANCELLATION REASON")
+    logger.info("="*80)
+
+    try:
+        customer_phone = function_args.get("customer_phone") or whatsapp_phone
+        original_date = function_args.get("original_booking_date", "")
+        original_time = function_args.get("original_booking_time", "")
+        reason = function_args.get("cancellation_reason", "other")
+        outcome = function_args.get("outcome", "cancelled")
+        notes = function_args.get("notes", "")
+
+        # Normalize phone
+        if customer_phone:
+            customer_phone = customer_phone.replace("@s.whatsapp.net", "").replace("+", "").replace("-", "").replace(" ", "")
+
+        logger.info(f"Phone: {customer_phone}")
+        logger.info(f"Original Date: {original_date}")
+        logger.info(f"Original Time: {original_time}")
+        logger.info(f"Reason: {reason}")
+        logger.info(f"Outcome: {outcome}")
+        logger.info(f"Notes: {notes}")
+
+        if not lead_manager:
+            logger.error("Lead manager not initialized")
+            return {"success": False, "message": "Lead manager not available"}
+
+        result = lead_manager.log_cancellation_reason(
+            customer_phone=customer_phone,
+            original_booking_date=original_date,
+            original_booking_time=original_time,
+            cancellation_reason=reason,
+            outcome=outcome,
+            notes=notes
+        )
+
+        logger.info(f"Log result: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error logging cancellation: {e}")
+        return {"success": False, "message": str(e)}
 
 
 
@@ -3318,7 +3409,8 @@ INSTRUCTIONS:
             get_send_menu_image_function_definition(),
             get_track_conversation_info_function_definition(),
             get_lookup_my_bookings_function_definition(),
-            get_check_my_membership_function_definition()
+            get_check_my_membership_function_definition(),
+            get_log_cancellation_reason_function_definition()
         ]
 
         # Call AI with function calling enabled
@@ -3535,6 +3627,23 @@ INSTRUCTIONS:
                         "content": json.dumps(result_message, default=str)
                     })
 
+                elif function_name == "log_cancellation_reason":
+                    # Log cancellation reason for analytics
+                    customer_phone = sender.replace('@s.whatsapp.net', '')
+                    logger.info(f"Logging cancellation for: {customer_phone}")
+
+                    cancellation_result = handle_log_cancellation_reason_function_call(
+                        function_args=function_args,
+                        whatsapp_phone=customer_phone
+                    )
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(cancellation_result, default=str)
+                    })
+
 
             # Note: AI called a function, we'll add the final response after execution
 
@@ -3617,7 +3726,13 @@ INSTRUCTIONS:
                 message_type="outgoing"
             )
         else:
-            logger.error("No Chatwoot conversation available to send bot reply")
+            # Chatwoot not available - send directly via WhatsApp
+            logger.info("Sending bot reply directly via WhatsApp...")
+            if whatsapp_handler and sender:
+                whatsapp_handler.send_message(sender.replace("@s.whatsapp.net", ""), assistant_message)
+                logger.info("✓ Bot reply sent via WhatsApp")
+            else:
+                logger.error("No WhatsApp handler available to send bot reply")
 
         # ⭐ AUTO-DETECT BOOKING CONFIRMATION ⭐
         # If AI sends booking confirmation but didn't call record_booking(), auto-record it
