@@ -10,6 +10,13 @@ from utils.logger import get_logger
 
 logger = get_logger(__name__)
 
+# Whisper prompt for Malaysian multilingual context (Malay/Chinese/English)
+# This helps Whisper correctly identify language and vocabulary for short voice clips
+WHISPER_PROMPT = """Serenity Reflexology Example City customer conversation.
+Malay: tak boleh, boleh, ok lah, nak book, ada slot tak, berapa harga, urut, terima kasih, baik, nanti, esok, hari ini, mahu, tidak, ya, saya, awak, bila, mana, kenapa, macam mana, boleh tak, tak nak, nak
+Chinese: 预约, 按摩, 可以, 不可以, 好的, 多少钱, 谢谢, 几点, 今天, 明天, 要, 不要, 我要, 有没有, 位子, 脚底, 身体, 师傅
+English: booking, massage, appointment, slot, therapist, body massage, foot massage, cancel, reschedule, tomorrow, today, how much, thank you, ok, yes, no"""
+
 
 def validate_audio(file_path: str) -> bool:
     """
@@ -150,7 +157,7 @@ def get_audio_info(file_path: str, file_extension: str) -> Dict[str, Any]:
         raise Exception(f"Error getting audio info: {str(e)}")
 
 
-def transcribe_audio(file_path: str, ai_engine, language: Optional[str] = None) -> str:
+def transcribe_audio(file_path: str, ai_engine, language: Optional[str] = None, prompt: Optional[str] = None) -> str:
     """
     Transcribe audio file using OpenAI Whisper API
 
@@ -158,6 +165,7 @@ def transcribe_audio(file_path: str, ai_engine, language: Optional[str] = None) 
         file_path (str): Path to audio file
         ai_engine: AIEngine instance
         language (str, optional): Language code (e.g., 'en', 'ms', 'zh'). None for auto-detection.
+        prompt (str, optional): Prompt to guide transcription with expected vocabulary/context.
 
     Returns:
         str: Transcribed text
@@ -167,9 +175,10 @@ def transcribe_audio(file_path: str, ai_engine, language: Optional[str] = None) 
     """
     logger.info(f"Transcribing audio: {file_path}")
     logger.debug(f"Language: {language or 'auto-detect'}")
+    logger.debug(f"Using prompt: {'Yes' if prompt else 'No'}")
 
     try:
-        result = ai_engine.transcribe_audio(file_path, language)
+        result = ai_engine.transcribe_audio(file_path, language, prompt)
 
         if result['success']:
             logger.info(f"✓ Transcription successful")
@@ -227,8 +236,8 @@ def process_voice(file_path: str, file_extension: str, ai_engine) -> Dict[str, A
     logger.info(f"  Estimated duration: {audio_info['estimated_duration_min']} minutes")
     logger.info(f"  Est. processing time: {audio_info['processing_time_estimate']}")
 
-    # Transcribe audio
-    transcription = transcribe_audio(file_path, ai_engine)
+    # Transcribe audio with multilingual Malaysian prompt
+    transcription = transcribe_audio(file_path, ai_engine, prompt=WHISPER_PROMPT)
 
     logger.info(f"✓ Voice processing successful")
     logger.info(f"  Transcription length: {len(transcription)} characters")

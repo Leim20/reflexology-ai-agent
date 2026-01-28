@@ -1137,7 +1137,7 @@ def get_record_booking_function_definition():
         "type": "function",
         "function": {
             "name": "record_booking",
-            "description": "Record a confirmed booking to the Bookings sheet when customer has filled in the booking template and you have sent the confirmation. ONLY call this function AFTER you send the booking confirmation message with all details. Extract the booking information from the customer's filled template.",
+            "description": "Record a confirmed booking to the Bookings sheet when customer has filled in the booking template and you have sent the confirmation. ONLY call this function AFTER you send the booking confirmation message with all details. Extract the booking information from the customer's filled template. For RESCHEDULE: include original_booking_date to update the existing booking instead of creating a new one.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -1155,7 +1155,7 @@ def get_record_booking_function_definition():
                     },
                     "booking_date": {
                         "type": "string",
-                        "description": "Date of appointment from booking template (预约日期/Date field) in YYYY-MM-DD format or original format provided"
+                        "description": "NEW date of appointment from booking template (预约日期/Date field) in YYYY-MM-DD format or original format provided"
                     },
                     "booking_time": {
                         "type": "string",
@@ -1168,6 +1168,10 @@ def get_record_booking_function_definition():
                     "therapist_gender": {
                         "type": "string",
                         "description": "Therapist gender preference from booking template (女技师/男技师 field). Must be 'Male' or 'Female'. Recognize: 男技师/Male therapist/男师傅 = 'Male', 女技师/Female therapist/女师傅 = 'Female'"
+                    },
+                    "original_booking_date": {
+                        "type": "string",
+                        "description": "ONLY for RESCHEDULE: The ORIGINAL date from CUSTOMER BOOKING HISTORY that customer wants to change. This tells the system which existing booking to update. Leave empty for new bookings."
                     }
                 },
                 "required": ["customer_name", "customer_gender", "customer_phone", "booking_date", "booking_time", "service", "therapist_gender"]
@@ -1713,12 +1717,19 @@ If they ask about bookings, offer to help them make a new booking.
     else:
         lines.append("Last Visit: None on record")
 
-    # Upcoming bookings
+    # Upcoming bookings - include ALL 7 fields for modification/reschedule
     upcoming = booking_data.get("upcoming", [])
     if upcoming:
         lines.append(f"Upcoming Bookings: {len(upcoming)}")
         for i, b in enumerate(upcoming[:3]):
-            lines.append(f"  - {b.get('Booking Date', '?')} {b.get('Booking Time', '')}: {b.get('Service', '?')}")
+            lines.append(f"  [Booking {i+1}]")
+            lines.append(f"    - Name: {b.get('Name', 'Unknown')}")
+            lines.append(f"    - Gender: {b.get('Gender', 'Unknown')}")
+            lines.append(f"    - Phone: {b.get('Phone', 'Unknown')}")
+            lines.append(f"    - Date: {b.get('Booking Date', 'Unknown')}")
+            lines.append(f"    - Time: {b.get('Booking Time', 'Unknown')}")
+            lines.append(f"    - Service: {b.get('Service', 'Unknown')}")
+            lines.append(f"    - Therapist: {b.get('Therapist Gender', 'Unknown')}")
     else:
         lines.append("Upcoming Bookings: None")
 
@@ -1919,8 +1930,13 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
         return False
 
 
-def handle_record_booking_function_call(function_args: dict) -> dict:
-    """Handle record_booking function call from AI"""
+def handle_record_booking_function_call(function_args: dict, sender_phone: str = None) -> dict:
+    """Handle record_booking function call from AI
+
+    Args:
+        function_args: Arguments from AI function call
+        sender_phone: Actual sender's phone from webhook (used as fallback if AI passes invalid phone)
+    """
     logger.info("="*80)
     logger.info("📅 HANDLING BOOKING RECORDING FUNCTION CALL")
     logger.info("="*80)
@@ -1932,15 +1948,26 @@ def handle_record_booking_function_call(function_args: dict) -> dict:
     booking_time = function_args.get('booking_time', '')
     service = function_args.get('service', '')
     therapist_gender = function_args.get('therapist_gender', '')
+    original_booking_date = function_args.get('original_booking_date', None)  # For reschedule
+
+    # Fix for "Unknown" phone bug: If AI passes invalid phone, use sender's actual phone
+    original_phone = customer_phone
+    if sender_phone:
+        # Check if customer_phone is invalid (Unknown, empty, or non-numeric)
+        normalized_phone = ''.join(filter(str.isdigit, customer_phone))
+        if not normalized_phone or customer_phone.lower() == 'unknown' or len(normalized_phone) < 8:
+            customer_phone = sender_phone
+            logger.warning(f"⚠️ Phone override: AI passed '{original_phone}', using sender's phone '{sender_phone}'")
 
     logger.info(f"📋 Booking Details:")
     logger.info(f"   Name: {customer_name}")
     logger.info(f"   Gender: {customer_gender}")
-    logger.info(f"   Phone: {customer_phone}")
+    logger.info(f"   Phone: {customer_phone}" + (f" (overridden from '{original_phone}')" if customer_phone != original_phone else ""))
     logger.info(f"   Date: {booking_date}")
     logger.info(f"   Time: {booking_time}")
     logger.info(f"   Service: {service}")
     logger.info(f"   Therapist: {therapist_gender}")
+    logger.info(f"   Original Date (reschedule): {original_booking_date}" if original_booking_date else "   Mode: New booking")
 
     if not all([customer_name, customer_gender, customer_phone, booking_date, booking_time, service, therapist_gender]):
         logger.error("❌ Missing required booking information")
@@ -1957,7 +1984,8 @@ def handle_record_booking_function_call(function_args: dict) -> dict:
             booking_date=booking_date,
             booking_time=booking_time,
             service=service,
-            therapist_gender=therapist_gender
+            therapist_gender=therapist_gender,
+            original_booking_date=original_booking_date  # For reschedule - finds existing booking by this date
         )
 
         if result['success']:
@@ -3008,6 +3036,18 @@ IMPORTANT: This customer is ALREADY a member!
                 logger.error(f"Error pre-fetching booking data: {e}")
             # ===================================================================
 
+            # ===================================================================
+            # CUSTOMER WHATSAPP PHONE INJECTION - For booking "this number" usage
+            # ===================================================================
+            customer_phone_clean = sender.replace('@s.whatsapp.net', '')
+            system_prompt += f"""
+===== CUSTOMER WHATSAPP INFO =====
+Customer WhatsApp Phone Number: {customer_phone_clean}
+(Use this when customer says "this number" / "这个号码" / "my number" for booking)
+==================================
+"""
+            # ===================================================================
+
             conversation_manager.create_session(session_id, system_prompt)
 
         # Process message based on type
@@ -3497,7 +3537,8 @@ INSTRUCTIONS:
 
                 elif function_name == "record_booking":
                     booking_result = handle_record_booking_function_call(
-                        function_args=function_args
+                        function_args=function_args,
+                        sender_phone=sender  # Pass actual sender's phone to fix "Unknown" phone bug
                     )
 
                     # Clear session to refresh booking data on next message

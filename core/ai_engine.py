@@ -198,13 +198,14 @@ class AIEngine:
                 'elapsed_time': elapsed_time
             }
 
-    def transcribe_audio(self, audio_file_path: str, language: Optional[str] = None) -> Dict[str, Any]:
+    def transcribe_audio(self, audio_file_path: str, language: Optional[str] = None, prompt: Optional[str] = None) -> Dict[str, Any]:
         """
         Transcribe audio file using Whisper API
 
         Args:
             audio_file_path (str): Path to audio file
             language (str, optional): Language code (e.g., 'en', 'ms', 'zh')
+            prompt (str, optional): Prompt to guide transcription with expected vocabulary/context
 
         Returns:
             dict: {
@@ -220,6 +221,7 @@ class AIEngine:
 
         logger.debug(f"Audio file: {audio_file_path}")
         logger.debug(f"Language: {language or 'auto-detect'}")
+        logger.debug(f"Prompt: {prompt[:100] + '...' if prompt and len(prompt) > 100 else prompt}")
 
         start_time = time.time()
 
@@ -227,17 +229,17 @@ class AIEngine:
             with open(audio_file_path, 'rb') as audio_file:
                 logger.info("🎤 Calling Whisper API...")
 
+                # Build kwargs for API call
+                kwargs = {
+                    "model": "whisper-1",
+                    "file": audio_file
+                }
                 if language:
-                    transcript = self.client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file,
-                        language=language
-                    )
-                else:
-                    transcript = self.client.audio.transcriptions.create(
-                        model="whisper-1",
-                        file=audio_file
-                    )
+                    kwargs["language"] = language
+                if prompt:
+                    kwargs["prompt"] = prompt
+
+                transcript = self.client.audio.transcriptions.create(**kwargs)
 
             elapsed_time = time.time() - start_time
             transcription = transcript.text.strip()

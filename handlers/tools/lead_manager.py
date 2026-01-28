@@ -1273,12 +1273,14 @@ Example: "Female therapist, 90min body massage, evening slots"
         booking_date: str,
         booking_time: str,
         service: str,
-        therapist_gender: str
+        therapist_gender: str,
+        original_booking_date: str = None
     ) -> Dict[str, Any]:
         """
         Record a confirmed booking to the Bookings sheet.
         - Normalizes date/time to standard format
-        - Updates existing booking if same phone+date exists
+        - If original_booking_date provided: finds booking by phone+original_date and UPDATES it
+        - If original_booking_date not provided: checks phone+new_date, updates if exists, else inserts
         """
         logger.info("="*80)
         logger.info("RECORDING BOOKING TO GOOGLE SHEETS")
@@ -1304,11 +1306,27 @@ Example: "Female therapist, 90min body massage, evening slots"
             logger.info(f"Time: {booking_time} -> {normalized_time}")
             logger.info(f"Service: {service}")
             logger.info(f"Therapist: {therapist_gender}")
+            logger.info(f"Original Date (for reschedule): {original_booking_date}")
 
-            # Check for existing booking (same phone + same date) to UPDATE
+            # Determine which date to search for:
+            # - If original_booking_date provided (reschedule): find by phone + ORIGINAL date
+            # - If not provided (new booking): find by phone + NEW date
+            if original_booking_date:
+                search_date = self._normalize_booking_date(original_booking_date)
+                logger.info(f"RESCHEDULE MODE: Searching for phone={customer_phone} + original_date={search_date}")
+            else:
+                search_date = normalized_date
+                logger.info(f"NEW/UPDATE MODE: Searching for phone={customer_phone} + date={search_date}")
+
+            # Check for existing booking to UPDATE
             all_records = self.bookings_sheet.get_all_values()
             existing_row = None
             existing_data = None
+
+            # Normalize customer phone for comparison (extract digits, handle country code)
+            customer_phone_digits = ''.join(filter(str.isdigit, customer_phone))
+            # Remove leading '60' country code if present for flexible matching
+            customer_phone_normalized = customer_phone_digits[-10:] if len(customer_phone_digits) >= 10 else customer_phone_digits
 
             for i, row in enumerate(all_records[1:], start=2):  # Skip header
                 if len(row) >= 4:
@@ -1316,10 +1334,15 @@ Example: "Female therapist, 90min body massage, evening slots"
                     row_date = row[3].strip() if row[3] else ''
                     row_date_normalized = self._normalize_booking_date(row_date)
 
-                    if row_phone == customer_phone and row_date_normalized == normalized_date:
+                    # Normalize row phone for comparison
+                    row_phone_digits = ''.join(filter(str.isdigit, row_phone))
+                    row_phone_normalized = row_phone_digits[-10:] if len(row_phone_digits) >= 10 else row_phone_digits
+
+                    # Compare normalized phones (handles 60120000000 vs 60120000000)
+                    if row_phone_normalized == customer_phone_normalized and row_date_normalized == search_date:
                         existing_row = i
                         existing_data = row
-                        logger.info(f"Found existing booking at row {i} - will UPDATE")
+                        logger.info(f"Found existing booking at row {i} (phone={row_phone}, date={row_date}) - will UPDATE")
                         break
 
             if existing_row:
