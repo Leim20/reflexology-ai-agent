@@ -30,6 +30,8 @@ from handlers.tools.broadcast_manager import BroadcastManager
 from utils import setup_logging, get_logger, check_file_size, allowed_file
 from utils.followup_queue import followup_message_queue
 from utils.batch_manager import followup_batch_manager
+from core.booking_extractor import has_booking_intent, extract_booking_fields
+from core.booking_session import get_session as get_booking_session, merge_session as merge_booking_session, missing_fields as booking_missing_fields, clear_session as clear_booking_session
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -1930,16 +1932,50 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
         return False
 
 
-def handle_record_booking_function_call(function_args: dict, sender_phone: str = None) -> dict:
+def handle_record_booking_function_call(function_args: dict, sender_phone: str = None, session_id: str = None) -> dict:
     """Handle record_booking function call from AI
 
     Args:
         function_args: Arguments from AI function call
         sender_phone: Actual sender's phone from webhook (used as fallback if AI passes invalid phone)
+        session_id: WhatsApp session ID for Redis booking session cross-check
     """
     logger.info("="*80)
     logger.info("📅 HANDLING BOOKING RECORDING FUNCTION CALL")
     logger.info("="*80)
+
+    # ===================================================================
+    # REDIS CROSS-CHECK: Override AI tool args with Redis session values
+    # Redis session contains fields extracted from what user actually said
+    # This fixes the name bug (AI using profile name instead of stated name)
+    # ===================================================================
+    redis_session = {}
+    if session_id:
+        try:
+            redis_session = get_booking_session(session_id)
+            logger.info(f"Redis booking session: {redis_session}")
+        except Exception as e:
+            logger.error(f"Failed to read Redis booking session: {e}")
+
+    # Field mapping: Redis field -> function_args field
+    redis_to_args = {
+        "customer_name": "customer_name",
+        "customer_gender": "customer_gender",
+        "phone": "customer_phone",
+        "date": "booking_date",
+        "time": "booking_time",
+        "service": "service",
+        "therapist_gender": "therapist_gender",
+    }
+
+    for redis_field, args_field in redis_to_args.items():
+        redis_val = redis_session.get(redis_field)
+        if redis_val is not None:
+            tool_val = function_args.get(args_field, '')
+            if redis_val != tool_val:
+                logger.info(f"REDIS OVERRIDE {args_field}: tool='{tool_val}' -> redis='{redis_val}'")
+            function_args[args_field] = redis_val
+    # ===================================================================
 
     customer_name = function_args.get('customer_name', '')
     customer_gender = function_args.get('customer_gender', '')
@@ -1990,6 +2026,14 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
 
         if result['success']:
             logger.info(f"✅ Booking recorded: Row {result['row']}")
+
+            # Clear Redis booking session after successful recording
+            if session_id:
+                try:
+                    clear_booking_session(session_id)
+                    logger.info("Redis booking session cleared after successful recording")
+                except Exception as e:
+                    logger.error(f"Failed to clear Redis booking session: {e}")
 
             # Send notification to Daniel
             send_booking_notification(
@@ -3440,6 +3484,40 @@ INSTRUCTIONS:
             messages_with_memory = messages
         # ===================================================================
 
+        # ===================================================================
+        # BOOKING EXTRACTION - Extract booking fields from user message
+        # Runs LLM structured extraction to populate Redis booking session
+        # ===================================================================
+        booking_hint = ""
+        raw_user_text = user_message if message_type == 'text' else ""
+
+        if raw_user_text and has_booking_intent(raw_user_text):
+            logger.info("📅 BOOKING INTENT DETECTED - extracting fields...")
+            try:
+                extracted = extract_booking_fields(
+                    raw_user_text,
+                    ai_engine,
+                    phone_fallback=sender_clean
+                )
+                if extracted:
+                    merge_booking_session(session_id, extracted)
+
+                missing = booking_missing_fields(session_id)
+                if missing:
+                    booking_hint = f"\n\n[SYSTEM NOTE - Do NOT show this to user verbatim] The customer is booking. Still missing: {', '.join(missing)}. Please ask for these details naturally."
+                    logger.info(f"Booking missing fields: {missing}")
+                else:
+                    logger.info("All booking fields collected!")
+            except Exception as e:
+                logger.error(f"Booking extraction error: {e}")
+        # ===================================================================
+
+        # Inject booking hint into messages if present
+        if booking_hint:
+            messages_with_memory = messages_with_memory + [
+                {"role": "system", "content": booking_hint}
+            ]
+
         # Define available tools (escalation + member registration + booking + menu image)
         tools = [
             get_escalation_function_definition(),
@@ -3538,7 +3616,8 @@ INSTRUCTIONS:
                 elif function_name == "record_booking":
                     booking_result = handle_record_booking_function_call(
                         function_args=function_args,
-                        sender_phone=sender  # Pass actual sender's phone to fix "Unknown" phone bug
+                        sender_phone=sender,  # Pass actual sender's phone to fix "Unknown" phone bug
+                        session_id=session_id  # Pass session ID for Redis booking cross-check
                     )
 
                     # Clear session to refresh booking data on next message
