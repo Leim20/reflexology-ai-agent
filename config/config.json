@@ -164,6 +164,7 @@
   },
   "menu_image": {
     "enabled": true,
+    "send_on_new_user_greeting": true,
     "send_for_keywords": [
       "所有menu",
       "所有价格",
@@ -207,5 +208,8 @@
     "enabled": true,
     "notify_phone": "60120000000",
     "notify_name": "Ryan"
+  },
+  "server": {
+    "public_base_url": "http://your-domain.com:5002"
   }
 }

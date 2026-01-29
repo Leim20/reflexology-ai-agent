@@ -1072,9 +1072,13 @@ When this happens, DO NOT send empty template. Instead:
 - Customer gives explicit number → Use that number
 - Not mentioned → ASK for it
 
-**Date/Time**: Extract what's stated
-- "today 5pm" → Date: today, Time: 5:00 PM
-- "tomorrow" → Date: tomorrow, Time: ASK
+**Date/Time**: Extract what's stated, then CONVERT relative dates to YYYY-MM-DD for confirmation
+- "today 5pm" → Date: [today's actual date in YYYY-MM-DD], Time: 5:00 PM
+- "tomorrow" → Date: [tomorrow's actual date in YYYY-MM-DD], Time: ASK
+- "今天" / "today" → Convert to actual YYYY-MM-DD (e.g., 2025-01-29)
+- "明天" / "tomorrow" → Convert to actual YYYY-MM-DD (e.g., 2025-01-30)
+- "后天" / "day after tomorrow" → Convert to actual YYYY-MM-DD
+- ⚠️ NEVER display "today" or "tomorrow" in the confirmation message — ALWAYS show YYYY-MM-DD
 
 **Service & Duration**:
 - "1hour half" / "1.5 hours" / "一个半小时" = 90 minutes
@@ -1096,7 +1100,7 @@ Extracted:
 ✅ Name: alex (DON'T expand to "Alexander")
 ✅ Gender: 男 (from "men")
 ✅ Phone: 60120000000 ← from CUSTOMER WHATSAPP INFO section ("this number" = their WhatsApp number)
-✅ Date: today
+✅ Date: [today's actual date in YYYY-MM-DD, e.g., 2025-01-29]
 ✅ Time: 5:00 PM
 ✅ Duration: 90 minutes (from "1hour half")
 ❌ Service type: MISSING (foot or body?)
@@ -1139,7 +1143,7 @@ Response format:
 姓名：[Name]
 性别：[Gender]
 电话：[Phone]
-预约日期：[Date]
+预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
 预约时间：[Time]
 按摩服务 & 时长：[Service]
 技师：[Therapist]
@@ -1156,7 +1160,7 @@ Response after confirmation:
 姓名：[Name]
 性别：[Gender]
 电话：[Phone]
-预约日期：[Date]
+预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
 预约时间：[Time]
 按摩服务 & 时长：[Service]
 技师：[Therapist]

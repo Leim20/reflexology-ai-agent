@@ -1382,8 +1382,9 @@ def handle_send_menu_image_function_call(
     # Fallback to direct WhatsApp send if Chatwoot path is unavailable or fails
     if not delivered_via:
         try:
-            # For WhatsApp, construct localhost static URL
-            static_url = f"http://localhost:5002/static/menu/menu_{language}.png"
+            # For WhatsApp, construct public static URL from config
+            public_base_url = config.get('server.public_base_url', 'http://localhost:5002')
+            static_url = f"{public_base_url}/static/menu/menu_{language}.png"
             result = whatsapp_handler.send_image(
                 to=sender,
                 image_url=static_url,
@@ -3397,6 +3398,7 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
         # MEMORY RETRIEVAL - Read customer memory before AI response
         # ===================================================================
         customer_memory = None
+        is_new_user = False
         customer_phone_normalized = sender.replace('@s.whatsapp.net', '')
 
         if lead_manager and config.get('lead_tracking.enabled', False) and config.get('memory.enabled', True):
@@ -3417,6 +3419,7 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
                     logger.info("="*80)
                 else:
                     logger.info("🆕 New customer - no previous memory found")
+                    is_new_user = True
 
             except Exception as e:
                 logger.error(f"Error retrieving customer memory: {e}")
@@ -3429,7 +3432,37 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
         menu_image_sent = False
         menu_request_detected = False
         menu_language = "english"
+        new_user_menu_triggered = False
         menu_config = config.get('menu_image', {})
+
+        # ===================================================================
+        # NEW USER GREETING + MENU - Auto-send menu for first-time customers
+        # ===================================================================
+        if is_new_user and menu_config.get('enabled', False) and menu_config.get('send_on_new_user_greeting', False):
+            logger.info("=" * 80)
+            logger.info("🆕 NEW USER GREETING - Auto-sending menu image")
+            logger.info("=" * 80)
+            menu_language = detect_language(user_message) if user_message else "english"
+            logger.info(f"Detected language for new user: {menu_language}")
+            new_user_menu_triggered = True
+
+            # Send menu image immediately for new user
+            try:
+                greeting_menu_result = handle_send_menu_image_function_call(
+                    function_args={"language": menu_language},
+                    sender=sender,
+                    language_hint=menu_language,
+                    conversation_id=chatwoot_conversation_id
+                )
+                if greeting_menu_result.get('success'):
+                    menu_image_sent = True
+                    logger.info("✅ Menu image sent successfully for new user greeting")
+                else:
+                    logger.warning(f"⚠️ Failed to send menu for new user: {greeting_menu_result.get('message')}")
+            except Exception as e:
+                logger.error(f"❌ Error sending menu for new user greeting: {e}")
+        # ===================================================================
+
         # Allow menu detection for both text and voice messages
         # (voice gets transcribed into user_message earlier)
         if menu_config.get('enabled', False) and user_message:
@@ -3437,7 +3470,7 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
 
             if detect_menu_request(user_message, keywords):
                 logger.info("=" * 80)
-                logger.info("dY-мЛ,?  MENU REQUEST DETECTED")
+                logger.info("📋 MENU REQUEST DETECTED")
                 logger.info("=" * 80)
                 menu_request_detected = True
                 menu_language = detect_language(user_message)
