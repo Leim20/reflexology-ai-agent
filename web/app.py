@@ -31,7 +31,15 @@ from utils import setup_logging, get_logger, check_file_size, allowed_file
 from utils.followup_queue import followup_message_queue
 from utils.batch_manager import followup_batch_manager
 from core.booking_extractor import has_booking_intent, extract_booking_fields
-from core.booking_session import get_session as get_booking_session, merge_session as merge_booking_session, missing_fields as booking_missing_fields, clear_session as clear_booking_session
+from core.booking_session import (
+    get_session as get_booking_session,
+    merge_session as merge_booking_session,
+    missing_fields as booking_missing_fields,
+    clear_session as clear_booking_session,
+    get_next_booking_step,
+    get_confirmation_summary,
+    mark_pain_point_asked
+)
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -1382,9 +1390,8 @@ def handle_send_menu_image_function_call(
     # Fallback to direct WhatsApp send if Chatwoot path is unavailable or fails
     if not delivered_via:
         try:
-            # For WhatsApp, construct public static URL from config
-            public_base_url = config.get('server.public_base_url', 'http://localhost:5002')
-            static_url = f"{public_base_url}/static/menu/menu_{language}.png"
+            # For WhatsApp, construct localhost static URL
+            static_url = f"http://localhost:5002/static/menu/menu_{language}.png"
             result = whatsapp_handler.send_image(
                 to=sender,
                 image_url=static_url,
@@ -1815,7 +1822,8 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
     # Check for booking confirmation keywords
     confirmation_keywords = [
         '预约注册成功', '预约成功', '您已经预约了', '已经帮您预约',
-        'booking confirmed', 'Booking recorded', '预约已记录'
+        'booking confirmed', 'Booking recorded', '预约已记录',
+        '预约已成功记录', '已经为您预约了', '已经为您预约'
     ]
 
     is_booking_confirmation = any(keyword in assistant_message for keyword in confirmation_keywords)
@@ -3398,7 +3406,6 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
         # MEMORY RETRIEVAL - Read customer memory before AI response
         # ===================================================================
         customer_memory = None
-        is_new_user = False
         customer_phone_normalized = sender.replace('@s.whatsapp.net', '')
 
         if lead_manager and config.get('lead_tracking.enabled', False) and config.get('memory.enabled', True):
@@ -3419,7 +3426,6 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
                     logger.info("="*80)
                 else:
                     logger.info("🆕 New customer - no previous memory found")
-                    is_new_user = True
 
             except Exception as e:
                 logger.error(f"Error retrieving customer memory: {e}")
@@ -3432,37 +3438,7 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
         menu_image_sent = False
         menu_request_detected = False
         menu_language = "english"
-        new_user_menu_triggered = False
         menu_config = config.get('menu_image', {})
-
-        # ===================================================================
-        # NEW USER GREETING + MENU - Auto-send menu for first-time customers
-        # ===================================================================
-        if is_new_user and menu_config.get('enabled', False) and menu_config.get('send_on_new_user_greeting', False):
-            logger.info("=" * 80)
-            logger.info("🆕 NEW USER GREETING - Auto-sending menu image")
-            logger.info("=" * 80)
-            menu_language = detect_language(user_message) if user_message else "english"
-            logger.info(f"Detected language for new user: {menu_language}")
-            new_user_menu_triggered = True
-
-            # Send menu image immediately for new user
-            try:
-                greeting_menu_result = handle_send_menu_image_function_call(
-                    function_args={"language": menu_language},
-                    sender=sender,
-                    language_hint=menu_language,
-                    conversation_id=chatwoot_conversation_id
-                )
-                if greeting_menu_result.get('success'):
-                    menu_image_sent = True
-                    logger.info("✅ Menu image sent successfully for new user greeting")
-                else:
-                    logger.warning(f"⚠️ Failed to send menu for new user: {greeting_menu_result.get('message')}")
-            except Exception as e:
-                logger.error(f"❌ Error sending menu for new user greeting: {e}")
-        # ===================================================================
-
         # Allow menu detection for both text and voice messages
         # (voice gets transcribed into user_message earlier)
         if menu_config.get('enabled', False) and user_message:
@@ -3470,7 +3446,7 @@ Customer WhatsApp Phone Number: {customer_phone_clean}
 
             if detect_menu_request(user_message, keywords):
                 logger.info("=" * 80)
-                logger.info("📋 MENU REQUEST DETECTED")
+                logger.info("dY-мЛ,?  MENU REQUEST DETECTED")
                 logger.info("=" * 80)
                 menu_request_detected = True
                 menu_language = detect_language(user_message)
@@ -3518,14 +3494,30 @@ INSTRUCTIONS:
         # ===================================================================
 
         # ===================================================================
-        # BOOKING EXTRACTION - Extract booking fields from user message
-        # Runs LLM structured extraction to populate Redis booking session
+        # SEQUENTIAL BOOKING FLOW - Guide conversation step by step
         # ===================================================================
         booking_hint = ""
         raw_user_text = user_message if message_type == 'text' else ""
+        is_returning_customer = customer_memory and customer_memory.get('is_returning', False)
 
-        if raw_user_text and has_booking_intent(raw_user_text):
-            logger.info("📅 BOOKING INTENT DETECTED - extracting fields...")
+        # Check current booking flow state FIRST
+        next_step = get_next_booking_step(session_id)
+        current_step = next_step["step"]
+        session_data = next_step.get("session", {})
+
+        logger.info(f"📋 BOOKING FLOW | Step: {current_step} | Returning: {is_returning_customer}")
+
+        # For NEW customers: Always guide through booking flow from greeting
+        # For RETURNING customers: Only guide if they've started booking
+        has_started_booking = any(session_data.get(f) for f in ["pain_point", "service", "date", "time", "therapist_gender"])
+        should_guide_flow = (not is_returning_customer) or has_started_booking
+
+        # ===================================================================
+        # BOOKING EXTRACTION - Always extract when flow is active
+        # Let LLM decide what to extract (no keyword dependency)
+        # ===================================================================
+        if raw_user_text and should_guide_flow and current_step != "complete":
+            logger.info("📅 EXTRACTING BOOKING FIELDS (flow active)...")
             try:
                 extracted = extract_booking_fields(
                     raw_user_text,
@@ -3534,15 +3526,78 @@ INSTRUCTIONS:
                 )
                 if extracted:
                     merge_booking_session(session_id, extracted)
+                    logger.info(f"Booking fields extracted: {extracted}")
 
-                missing = booking_missing_fields(session_id)
-                if missing:
-                    booking_hint = f"\n\n[SYSTEM NOTE - Do NOT show this to user verbatim] The customer is booking. Still missing: {', '.join(missing)}. Please ask for these details naturally."
-                    logger.info(f"Booking missing fields: {missing}")
-                else:
-                    logger.info("All booking fields collected!")
+                    # Re-check step after extraction (might have progressed)
+                    next_step = get_next_booking_step(session_id)
+                    current_step = next_step["step"]
+                    logger.info(f"📋 BOOKING FLOW | After extraction, step: {current_step}")
             except Exception as e:
                 logger.error(f"Booking extraction error: {e}")
+
+        # ===================================================================
+        # INJECT BOOKING HINTS - Guide AI to ask ONE question at a time
+        # ===================================================================
+        if should_guide_flow and current_step != "complete":
+            logger.info(f"🎯 SEQUENTIAL FLOW ACTIVE | Next step: {current_step}")
+
+            if current_step == "pain_point":
+                # Mark as asked so we skip next time if user doesn't answer
+                mark_pain_point_asked(session_id)
+                booking_hint = """
+[BOOKING FLOW - STEP 1: DISCOVERY]
+This is a new customer. Your greeting should:
+1. Send menu image (call send_menu_image function)
+2. Ask about their PAIN POINT / what's bothering them
+Tone: Warm, curious, caring - like asking a friend "最近哪里比较累/酸痛呢？"
+Do NOT ask about service, date, time, or therapist yet.
+Ask ONE question only about their pain/discomfort.
+"""
+            elif current_step == "service":
+                # Get pain_point for context (may be null if skipped)
+                pain_context = session_data.get('pain_point', '')
+                pain_note = f"Customer's concern: {pain_context}" if pain_context else "Customer didn't mention specific pain (maybe just wants to relax)."
+                booking_hint = f"""
+[BOOKING FLOW - STEP 2: SERVICE SELECTION]
+{pain_note}
+Now guide them to choose a SERVICE/PACKAGE.
+Reference the menu if needed. Recommend based on their situation.
+Tone: Helpful, knowledgeable - suggest what's good for them.
+Do NOT ask about date, time, or therapist yet.
+Ask ONE question only about service preference.
+"""
+            elif current_step == "datetime":
+                booking_hint = """
+[BOOKING FLOW - STEP 3: DATE & TIME]
+Service selected. Now ask about preferred DATE and TIME.
+Tone: Accommodating, flexible - "您方便什么时候过来呢？"
+Do NOT ask about therapist preference yet.
+Ask about timing only.
+"""
+            elif current_step == "therapist_gender":
+                booking_hint = """
+[BOOKING FLOW - STEP 4: THERAPIST PREFERENCE]
+Service and time confirmed. Now ask about THERAPIST GENDER preference.
+Tone: Casual, no pressure - "技师方面有偏好吗？男女都很专业的～"
+This is the last question before confirmation.
+"""
+        elif current_step == "complete":
+            # All fields collected - prompt AI to confirm
+            summary = get_confirmation_summary(session_id)
+            booking_hint = f"""
+[BOOKING FLOW - STEP 5: CONFIRM BOOKING]
+All booking info collected! Summarize and confirm with customer.
+Booking details:
+- Service: {summary.get('service', 'N/A')}
+- Date: {summary.get('date', 'N/A')}
+- Time: {summary.get('time', 'N/A')}
+- Therapist: {summary.get('therapist_gender', 'N/A')}
+
+Tone: Professional but warm - confirm naturally, not like a receipt.
+Do NOT mention pain_point in confirmation.
+After customer confirms, call record_booking function.
+"""
+            logger.info("✅ BOOKING FLOW COMPLETE - Ready for confirmation")
         # ===================================================================
 
         # Inject booking hint into messages if present

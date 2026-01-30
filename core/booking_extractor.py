@@ -28,9 +28,10 @@ Return a JSON object with these fields (use null for anything NOT explicitly men
 {{
   "customer_name": "string or null - ONLY if user typed their name in this message",
   "customer_gender": "string or null - 'Male' or 'Female' only if mentioned",
-  "service": "string or null - e.g. 'foot reflexology', 'body massage', '90min body massage'",
-  "date": "string or null - e.g. 'tomorrow', '2025-12-01', 'this Saturday'",
-  "time": "string or null - e.g. '5pm', '17:00', 'afternoon'",
+  "pain_point": "string or null - body part that hurts/is tired (e.g. 'shoulder', 'back', 'legs', '肩膀', '背部', '腰')",
+  "service": "string or null - e.g. 'foot reflexology', 'body massage', '90min body massage', '足部60分钟', '香薰疗法'",
+  "date": "string or null - e.g. 'tomorrow', '明天', '后天', 'this Saturday', '星期六'",
+  "time": "string or null - e.g. '5pm', '17:00', 'afternoon', '下午3点', '晚上8点'",
   "therapist_gender": "string or null - 'Male' or 'Female' only if mentioned",
   "phone": "string or null - ONLY if user typed a phone number"
 }}
@@ -38,6 +39,7 @@ Return a JSON object with these fields (use null for anything NOT explicitly men
 IMPORTANT RULES:
 - Return ONLY the JSON object, no other text
 - Use null for any field the customer did NOT explicitly state
+- For pain_point: Extract if they mention body parts that are sore/tired/uncomfortable (e.g. "肩膀酸", "背部很累", "shoulders hurt", "腰不舒服")
 - For customer_name: ONLY extract if the user literally wrote their name (e.g. "my name is Alex", "I'm Sarah", "名字是小明"). NEVER use WhatsApp profile name.
 - For customer_gender: ONLY extract if they said their gender (e.g. "I'm male", "女", "我是男生")
 - For service: ONLY extract if they mentioned a specific service type
