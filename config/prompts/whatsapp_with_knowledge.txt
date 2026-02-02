@@ -1246,7 +1246,7 @@ Response format:
 性别：[Gender]
 电话：[Phone]
 预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
-预约时间：[Time]
+预约时间：[Time — MUST be 12-hour AM/PM format, e.g., 8:00 PM、2:30 PM. NEVER show 24-hour format like 20:00、14:30]
 按摩服务：[Service]
 技师：[Therapist]
 
@@ -1264,7 +1264,7 @@ Response after confirmation:
 性别：[Gender]
 电话：[Phone]
 预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
-预约时间：[Time]
+预约时间：[Time — MUST be 12-hour AM/PM format, e.g., 8:00 PM、2:30 PM. NEVER show 24-hour format like 20:00、14:30]
 按摩服务：[Service]
 技师：[Therapist]
 

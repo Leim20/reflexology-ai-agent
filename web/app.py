@@ -1391,7 +1391,7 @@ def handle_send_menu_image_function_call(
     if not delivered_via:
         try:
             # For WhatsApp, construct localhost static URL
-            static_url = f"http://localhost:5002/static/menu/menu_{language}.png"
+            static_url = f"http://your-domain.com:5002/static/menu/menu_{language}.png"
             result = whatsapp_handler.send_image(
                 to=sender,
                 image_url=static_url,
@@ -3728,10 +3728,10 @@ After customer confirms, call record_booking function.
                     )
 
                     function_results.append({
-                        tool_call_id: tool_call['id'],
-                        role: tool,
-                        name: function_name,
-                        content: json.dumps(validation_result)
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(validation_result)
                     })
                 elif function_name == "track_conversation_info":
                     track_result = handle_track_conversation_info_function_call(
