@@ -3669,12 +3669,11 @@ After customer confirms, call record_booking function.
                     registration_result = handle_register_member_function_call(
                         function_args=function_args,
                         whatsapp_phone=sender
-                    )
-
-                    # Clear session to refresh member data on next message
-                    if registration_result.get("success"):
-                        conversation_manager.clear_session(session_id)
-                        logger.info("Session cleared after registration - will refresh data")
+                    )                    # DISABLED: Clear session after registration (causes system prompt loss)
+                    # if registration_result.get("success"):
+                    #     conversation_manager.clear_session(session_id)
+                    #     logger.info("Session cleared after registration - will refresh data")
+                    pass  # Keep session intact to preserve system prompt
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],
@@ -3706,12 +3705,11 @@ After customer confirms, call record_booking function.
                         function_args=function_args,
                         sender_phone=sender,  # Pass actual sender's phone to fix "Unknown" phone bug
                         session_id=session_id  # Pass session ID for Redis booking cross-check
-                    )
-
-                    # Clear session to refresh booking data on next message
-                    if booking_result.get("success"):
-                        conversation_manager.clear_session(session_id)
-                        logger.info("Session cleared after booking - will refresh data")
+                    )                    # DISABLED: Clear session after booking (causes system prompt loss)
+                    # if booking_result.get("success"):
+                    #     conversation_manager.clear_session(session_id)
+                    #     logger.info("Session cleared after booking - will refresh data")
+                    pass  # Keep session intact to preserve system prompt
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],
