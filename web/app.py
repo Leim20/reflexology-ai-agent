@@ -1811,7 +1811,7 @@ _Recorded automatically by Jessica Bot_"""
         return False
 
 
-def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) -> bool:
+def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, session_id: str = None) -> bool:
     """
     Automatically detect booking confirmation in AI response and record it.
     This is a fallback when AI doesn't call record_booking() function.
@@ -1835,7 +1835,23 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
     logger.info("🔍 AUTO-DETECT: Booking confirmation detected in AI response!")
     logger.info("="*80)
 
-    # Parse booking details from the message
+    # ===================================================================
+    # REDIS-FIRST: Try to read booking data from Redis session
+    # Redis has fields extracted from the actual conversation flow,
+    # which is more reliable than regex-parsing the AI confirmation text.
+    # ===================================================================
+    redis_session = {}
+    if session_id:
+        try:
+            redis_session = get_booking_session(session_id)
+            if redis_session:
+                logger.info(f"📦 AUTO-DETECT: Redis booking session found: {redis_session}")
+            else:
+                logger.info("📦 AUTO-DETECT: Redis booking session is empty, falling back to regex")
+        except Exception as e:
+            logger.error(f"📦 AUTO-DETECT: Failed to read Redis booking session: {e}")
+
+    # Parse booking details from the AI message text (regex fallback)
     # Patterns for Chinese format
     name_match = re.search(r'姓名[：:]\s*([^\n]+)', assistant_message)
     phone_match = re.search(r'电话[：:]\s*([0-9]+)', assistant_message)
@@ -1845,13 +1861,22 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
     therapist_match = re.search(r'技师[：:]\s*([^\n]+)', assistant_message)
     gender_match = re.search(r'性别[：:]\s*([^\n]+)', assistant_message)
 
-    customer_name = name_match.group(1).strip() if name_match else ''
-    customer_phone = phone_match.group(1).strip() if phone_match else sender_phone.replace('@s.whatsapp.net', '')
-    booking_date = date_match.group(1).strip() if date_match else ''
-    booking_time = time_match.group(1).strip() if time_match else ''
-    service = service_match.group(1).strip() if service_match else ''
-    therapist_gender = therapist_match.group(1).strip() if therapist_match else ''
-    customer_gender = gender_match.group(1).strip() if gender_match else ''
+    regex_name = name_match.group(1).strip() if name_match else ''
+    regex_phone = phone_match.group(1).strip() if phone_match else ''
+    regex_date = date_match.group(1).strip() if date_match else ''
+    regex_time = time_match.group(1).strip() if time_match else ''
+    regex_service = service_match.group(1).strip() if service_match else ''
+    regex_therapist = therapist_match.group(1).strip() if therapist_match else ''
+    regex_gender = gender_match.group(1).strip() if gender_match else ''
+
+    # Merge: Redis takes priority, regex fills gaps
+    customer_name = redis_session.get('customer_name') or regex_name
+    customer_phone = redis_session.get('phone') or regex_phone or sender_phone.replace('@s.whatsapp.net', '')
+    booking_date = redis_session.get('date') or regex_date
+    booking_time = redis_session.get('time') or regex_time
+    service = redis_session.get('service') or regex_service
+    therapist_gender = redis_session.get('therapist_gender') or regex_therapist
+    customer_gender = redis_session.get('customer_gender') or regex_gender
 
     # Normalize gender
     if '男' in customer_gender.lower() or 'male' in customer_gender.lower():
@@ -1919,6 +1944,22 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str) ->
 
         if result['success']:
             logger.info(f"✅ AUTO-DETECT: Booking recorded successfully! Row {result['row']}")
+
+            # Clear Redis booking session after successful recording
+            if session_id:
+                try:
+                    clear_booking_session(session_id)
+                    logger.info("📦 AUTO-DETECT: Redis booking session cleared after successful recording")
+                except Exception as e:
+                    logger.error(f"📦 AUTO-DETECT: Failed to clear Redis booking session: {e}")
+
+            # Add marker to conversation so booking flow doesn't re-trigger
+            if session_id and conversation_manager:
+                try:
+                    conversation_manager.add_message(session_id, 'assistant', '[BOOKING COMPLETED]')
+                    logger.info("📦 AUTO-DETECT: [BOOKING COMPLETED] marker added to conversation")
+                except Exception as e:
+                    logger.error(f"📦 AUTO-DETECT: Failed to add booking marker: {e}")
 
             # Send notification
             send_booking_notification(
@@ -3081,7 +3122,7 @@ IMPORTANT: This customer is ALREADY a member!
             # ===================================================================
             try:
                 customer_phone_clean = sender.replace('@s.whatsapp.net', '')
-                booking_data = pre_fetch_customer_bookings(customer_phone_clean, from_name)
+                booking_data = pre_fetch_customer_bookings(customer_phone_clean, message_data.get('from_name', ''))
                 booking_context = format_booking_context(booking_data)
                 system_prompt += booking_context
                 logger.info(f"Pre-fetched booking data: {booking_data.get('total_count', 0)} bookings")
@@ -3944,7 +3985,7 @@ After customer confirms, call record_booking function.
         # If AI sends booking confirmation but didn't call record_booking(), auto-record it
         if assistant_message and not tool_calls:
             try:
-                auto_detect_and_record_booking(assistant_message, sender)
+                auto_detect_and_record_booking(assistant_message, sender, session_id)
             except Exception as e:
                 logger.error(f"Auto-detect booking error: {str(e)}")
 

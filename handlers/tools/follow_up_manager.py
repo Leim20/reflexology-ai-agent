@@ -886,7 +886,7 @@ class FollowUpManager:
             stats = {'enrolled': 0, 'skipped': 0}
 
             for insight in insights:
-                phone = insight.get('Phone', '')
+                phone = str(insight.get('Phone', ''))
                 if not phone:
                     continue
 
