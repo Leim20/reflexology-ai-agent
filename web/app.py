@@ -38,7 +38,10 @@ from core.booking_session import (
     clear_session as clear_booking_session,
     get_next_booking_step,
     get_confirmation_summary,
-    mark_pain_point_asked
+    mark_pain_point_asked,
+    mark_personal_info_asked,
+    normalize_phone,
+    normalize_gender
 )
 
 # Initialize Flask app
@@ -1845,21 +1848,21 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
         try:
             redis_session = get_booking_session(session_id)
             if redis_session:
-                logger.info(f"📦 AUTO-DETECT: Redis booking session found: {redis_session}")
+                logger.info(f"\U0001f4e6 AUTO-DETECT: Redis booking session found: {redis_session}")
             else:
-                logger.info("📦 AUTO-DETECT: Redis booking session is empty, falling back to regex")
+                logger.info("\U0001f4e6 AUTO-DETECT: Redis booking session is empty, falling back to regex")
         except Exception as e:
-            logger.error(f"📦 AUTO-DETECT: Failed to read Redis booking session: {e}")
+            logger.error(f"\U0001f4e6 AUTO-DETECT: Failed to read Redis booking session: {e}")
 
     # Parse booking details from the AI message text (regex fallback)
     # Patterns for Chinese format
-    name_match = re.search(r'姓名[：:]\s*([^\n]+)', assistant_message)
-    phone_match = re.search(r'电话[：:]\s*([0-9]+)', assistant_message)
-    date_match = re.search(r'预约日期[：:]\s*([^\n]+)', assistant_message)
-    time_match = re.search(r'预约时间[：:]\s*([^\n]+)', assistant_message)
-    service_match = re.search(r'(?:按摩服务|服务)[^：:]*[：:]\s*([^\n]+)', assistant_message)
-    therapist_match = re.search(r'技师[：:]\s*([^\n]+)', assistant_message)
-    gender_match = re.search(r'性别[：:]\s*([^\n]+)', assistant_message)
+    name_match = re.search(r'\*?姓名\*?[：:]\s*([^\n]+)', assistant_message)
+    phone_match = re.search(r'\*?电话\*?[：:]\s*([0-9]+)', assistant_message)
+    date_match = re.search(r'\*?预约日期\*?[：:]\s*([^\n]+)', assistant_message)
+    time_match = re.search(r'\*?预约时间\*?[：:]\s*([^\n]+)', assistant_message)
+    service_match = re.search(r'(?:\*?按摩服务\*?|\*?服务\*?)[^：:]*[：:]\s*([^\n]+)', assistant_message)
+    therapist_match = re.search(r'\*?技师\*?[：:]\s*([^\n]+)', assistant_message)
+    gender_match = re.search(r'\*?性别\*?[：:]\s*([^\n]+)', assistant_message)
 
     regex_name = name_match.group(1).strip() if name_match else ''
     regex_phone = phone_match.group(1).strip() if phone_match else ''
@@ -1878,17 +1881,13 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
     therapist_gender = redis_session.get('therapist_gender') or regex_therapist
     customer_gender = redis_session.get('customer_gender') or regex_gender
 
-    # Normalize gender
-    if '男' in customer_gender.lower() or 'male' in customer_gender.lower():
-        customer_gender = 'Male'
-    elif '女' in customer_gender.lower() or 'female' in customer_gender.lower():
-        customer_gender = 'Female'
-
-    # Normalize therapist gender
-    if '男' in therapist_gender.lower() or 'male' in therapist_gender.lower():
-        therapist_gender = 'Male'
-    elif '女' in therapist_gender.lower() or 'female' in therapist_gender.lower():
-        therapist_gender = 'Female'
+    # Normalize phone, gender, and therapist gender
+    if customer_phone:
+        customer_phone = normalize_phone(customer_phone)
+    if customer_gender:
+        customer_gender = normalize_gender(customer_gender)
+    if therapist_gender:
+        therapist_gender = normalize_gender(therapist_gender)
 
     # Convert date format if needed (e.g., "2025年12月6日" -> "2025-12-06")
 # REMOVED: Old keyword conversion - now using AI datetime parser
@@ -1945,6 +1944,7 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
         if result['success']:
             logger.info(f"✅ AUTO-DETECT: Booking recorded successfully! Row {result['row']}")
 
+
             # Clear Redis booking session after successful recording
             if session_id:
                 try:
@@ -1960,7 +1960,6 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
                     logger.info("📦 AUTO-DETECT: [BOOKING COMPLETED] marker added to conversation")
                 except Exception as e:
                     logger.error(f"📦 AUTO-DETECT: Failed to add booking marker: {e}")
-
             # Send notification
             send_booking_notification(
                 customer_name=customer_name,
@@ -2044,6 +2043,14 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
         if not normalized_phone or customer_phone.lower() == 'unknown' or len(normalized_phone) < 8:
             customer_phone = sender_phone
             logger.warning(f"⚠️ Phone override: AI passed '{original_phone}', using sender's phone '{sender_phone}'")
+
+    # Normalize phone and gender before recording (safety net for values bypassing merge_session)
+    if customer_phone:
+        customer_phone = normalize_phone(customer_phone)
+    if customer_gender:
+        customer_gender = normalize_gender(customer_gender)
+    if therapist_gender:
+        therapist_gender = normalize_gender(therapist_gender)
 
     logger.info(f"📋 Booking Details:")
     logger.info(f"   Name: {customer_name}")
@@ -3563,7 +3570,8 @@ INSTRUCTIONS:
                 extracted = extract_booking_fields(
                     raw_user_text,
                     ai_engine,
-                    phone_fallback=sender_clean
+                    phone_fallback=sender_clean,
+                    current_step=current_step
                 )
                 if extracted:
                     merge_booking_session(session_id, extracted)
@@ -3620,23 +3628,66 @@ Ask about timing only.
 [BOOKING FLOW - STEP 4: THERAPIST PREFERENCE]
 Service and time confirmed. Now ask about THERAPIST GENDER preference.
 Tone: Casual, no pressure - "技师方面有偏好吗？男女都很专业的～"
-This is the last question before confirmation.
+"""
+            elif current_step == "personal_info":
+                mark_personal_info_asked(session_id)
+                # Build context of what we already know
+                known_name = session_data.get('customer_name')
+                known_gender = session_data.get('customer_gender')
+                known_phone = session_data.get('phone')
+                known_parts = []
+                if known_name:
+                    known_parts.append(f"Name: {known_name}")
+                if known_gender:
+                    known_parts.append(f"Gender: {known_gender}")
+                if known_phone:
+                    known_parts.append(f"Phone: {known_phone}")
+                known_info = "\n".join(known_parts) if known_parts else "None yet"
+
+                booking_hint = f"""
+[BOOKING FLOW - STEP 5: CONFIRM PERSONAL INFO]
+Before finalizing, confirm the customer's personal details: NAME, GENDER, and PHONE NUMBER.
+Already known info:
+{known_info}
+
+RULES:
+- Even if info is already known (e.g. from WhatsApp), you MUST still ask the customer to confirm or provide it.
+- Use a friendly, confirmatory tone. Examples:
+  - "请问联系号码是这个 WhatsApp 号码吗？还是有别的号码？😊"
+  - "方便留下您的名字吗？方便我们做记录～"
+  - "请问您是先生还是女士呢？😊"
+- Ask about ALL THREE (name, gender, phone) in ONE message. Do not split into multiple messages.
+- This is the last step before the final booking confirmation.
 """
         elif current_step == "complete":
             # All fields collected - prompt AI to confirm
             summary = get_confirmation_summary(session_id)
+
+            # Localize gender labels based on user language
+            user_lang = detect_language(raw_user_text) if raw_user_text else "english"
+            if user_lang == "chinese":
+                display_customer_gender = "男" if summary.get('customer_gender') == "Male" else "女" if summary.get('customer_gender') == "Female" else summary.get('customer_gender', 'N/A')
+                display_therapist_gender = "男师傅" if summary.get('therapist_gender') == "Male" else "女师傅" if summary.get('therapist_gender') == "Female" else summary.get('therapist_gender', 'N/A')
+            else:
+                display_customer_gender = summary.get('customer_gender', 'N/A')
+                display_therapist_gender = summary.get('therapist_gender', 'N/A')
+
             booking_hint = f"""
 [BOOKING FLOW - STEP 5: CONFIRM BOOKING]
 All booking info collected! Summarize and confirm with customer.
 Booking details:
+- Name: {summary.get('customer_name', 'N/A')}
+- Gender: {display_customer_gender}
+- Phone: {summary.get('phone', 'N/A')}
 - Service: {summary.get('service', 'N/A')}
 - Date: {summary.get('date', 'N/A')}
 - Time: {summary.get('time', 'N/A')}
-- Therapist: {summary.get('therapist_gender', 'N/A')}
+- Therapist: {display_therapist_gender}
 
 Tone: Professional but warm - confirm naturally, not like a receipt.
 Do NOT mention pain_point in confirmation.
-After customer confirms, call record_booking function.
+After customer confirms, you MUST call the record_booking function to save this booking.
+IMPORTANT: Every booking requires its own record_booking call. Even if you have called record_booking before for a previous booking, you MUST call it again for this new booking. Do NOT skip calling record_booking.
 """
             logger.info("✅ BOOKING FLOW COMPLETE - Ready for confirmation")
         # ===================================================================
@@ -3746,11 +3797,17 @@ After customer confirms, call record_booking function.
                         function_args=function_args,
                         sender_phone=sender,  # Pass actual sender's phone to fix "Unknown" phone bug
                         session_id=session_id  # Pass session ID for Redis booking cross-check
-                    )                    # DISABLED: Clear session after booking (causes system prompt loss)
-                    # if booking_result.get("success"):
-                    #     conversation_manager.clear_session(session_id)
-                    #     logger.info("Session cleared after booking - will refresh data")
-                    pass  # Keep session intact to preserve system prompt
+                    )
+
+                    # Insert conversation separator after successful booking
+                    # This tells the AI that any future booking is NEW and needs its own record_booking call
+                    if booking_result.get("success"):
+                        conversation_manager.add_message(session_id, 'system',
+                            "[BOOKING COMPLETED] The booking above has been successfully recorded. "
+                            "This booking session is now closed. If the customer wants to make another booking, "
+                            "treat it as a completely new booking and you MUST call record_booking again for the new booking."
+                        )
+                        logger.info("Inserted booking separator into conversation history")
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],

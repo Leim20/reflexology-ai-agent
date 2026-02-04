@@ -20,13 +20,33 @@ REQUIRED_FIELDS = [
     "pain_point",  # Discovery field - not shown in confirmation
 ]
 
-# Fields to show in booking confirmation (excludes discovery fields)
-CONFIRMATION_FIELDS = ["service", "date", "time", "therapist_gender"]
+# Fields to show in booking confirmation (excludes discovery fields like pain_point)
+CONFIRMATION_FIELDS = ["customer_name", "customer_gender", "phone", "service", "date", "time", "therapist_gender"]
 
 # Sequential flow order for collecting booking info
 BOOKING_FLOW_SEQUENCE = ["pain_point", "service", "datetime", "therapist_gender"]
 
 _redis = None
+
+GENDER_FIELDS = {"customer_gender", "therapist_gender"}
+
+
+def normalize_phone(phone: str) -> str:
+    """Normalize Malaysian phone number: 011xxxxxxxx → 6011xxxxxxxx."""
+    cleaned = phone.replace("-", "").replace(" ", "").replace("+", "")
+    if cleaned.startswith("0"):
+        cleaned = "60" + cleaned[1:]
+    return cleaned
+
+
+def normalize_gender(value: str) -> str:
+    """Normalize gender to Male/Female for storage."""
+    v = value.strip().lower()
+    if "男" in v or v == "male":
+        return "Male"
+    if "女" in v or v == "female":
+        return "Female"
+    return value
 
 
 def _get_redis():
@@ -56,6 +76,10 @@ def merge_session(session_id: str, extracted: dict) -> dict:
     for field in REQUIRED_FIELDS:
         value = extracted.get(field)
         if value is not None:
+            if field == "phone":
+                value = normalize_phone(value)
+            elif field in GENDER_FIELDS:
+                value = normalize_gender(value)
             current[field] = value
             changed.append(field)
     r = _get_redis()
@@ -137,12 +161,40 @@ def get_next_booking_step(session_id: str) -> dict:
             "session": session
         }
 
+    # Step 5: Confirm personal info (name, gender, phone)
+    # Always ask even if already known - for verification
+    personal_info_asked = session.get('_personal_info_asked', False)
+    if not personal_info_asked:
+        missing = []
+        for f in ("customer_name", "customer_gender", "phone"):
+            if not session.get(f):
+                missing.append(f)
+        return {
+            "step": "personal_info",
+            "missing": missing,
+            "session": session
+        }
+
     # All essential booking fields complete
     return {
         "step": "complete",
         "missing": [],
         "session": session
     }
+
+
+def mark_personal_info_asked(session_id: str) -> None:
+    """Mark that personal info confirmation has been asked."""
+    r = _get_redis()
+    raw = r.get(_key(session_id))
+    if raw:
+        session = json.loads(raw)
+    else:
+        session = {field: None for field in REQUIRED_FIELDS}
+
+    session['_personal_info_asked'] = True
+    r.set(_key(session_id), json.dumps(session), ex=BOOKING_TTL)
+    logger.info("BOOKING SESSION | %s | personal_info_asked marked", session_id)
 
 
 def get_confirmation_summary(session_id: str) -> dict:
