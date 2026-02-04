@@ -30,7 +30,6 @@ from handlers.tools.broadcast_manager import BroadcastManager
 from utils import setup_logging, get_logger, check_file_size, allowed_file
 from utils.followup_queue import followup_message_queue
 from utils.batch_manager import followup_batch_manager
-from core.booking_extractor import has_booking_intent, extract_booking_fields
 from core.booking_session import (
     get_session as get_booking_session,
     merge_session as merge_booking_session,
@@ -1193,6 +1192,67 @@ def get_record_booking_function_definition():
     }
 
 
+# ============================================================================
+# FUNCTION CALLING - UPDATE BOOKING FIELDS (replaces extract_booking_fields)
+# ============================================================================
+
+def get_update_booking_fields_function_definition():
+    """Define update_booking_fields function for OpenAI function calling.
+    Called by the conversation AI to save booking fields as the customer provides them."""
+    return {
+        "type": "function",
+        "function": {
+            "name": "update_booking_fields",
+            "description": (
+                "Save booking information provided by the customer during the booking flow. "
+                "Call this IMMEDIATELY whenever the customer provides any booking-related info "
+                "(pain point, service choice, date, time, therapist preference, name, gender, phone). "
+                "You may set multiple fields in one call if the customer provides several at once (e.g. '明天下午3点' = date + time). "
+                "IMPORTANT: Resolve contextual references before calling. If the customer says '就这个吧' (this one) or "
+                "'ok can' or '好' after you recommended a service, pass the actual service name you recommended, not the raw text. "
+                "For phone: if the customer says 'use this number' or '就这个号码', pass the sentinel value 'this_number'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "pain_point": {
+                        "type": "string",
+                        "description": "Customer's pain point or concern (e.g. '肩膀酸痛', 'lower back pain', 'just want to relax')"
+                    },
+                    "service": {
+                        "type": "string",
+                        "description": "Service name and duration as shown on the menu (e.g. '90分钟足部按摩', '120min body massage'). Resolve contextual replies like '就这个吧' to the actual service name."
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "Booking date in YYYY-MM-DD format. Resolve relative dates (明天, 后天, this Saturday) to actual dates."
+                    },
+                    "time": {
+                        "type": "string",
+                        "description": "Booking time in HH:MM 24-hour format (e.g. '14:00', '09:30'). Resolve natural language (下午3点 = 15:00)."
+                    },
+                    "therapist_gender": {
+                        "type": "string",
+                        "description": "Therapist gender preference. Must be 'Male' or 'Female'. Recognize: 男技师/男师傅 = 'Male', 女技师/女师傅 = 'Female'."
+                    },
+                    "customer_name": {
+                        "type": "string",
+                        "description": "Customer's name as provided by them."
+                    },
+                    "customer_gender": {
+                        "type": "string",
+                        "description": "Customer's gender. Must be 'Male' or 'Female'. Recognize: 男/先生 = 'Male', 女/女士 = 'Female'."
+                    },
+                    "phone": {
+                        "type": "string",
+                        "description": "Customer's phone number (digits only). Use sentinel 'this_number' if customer says to use their WhatsApp number."
+                    }
+                },
+                "required": []
+            }
+        }
+    }
+
 
 # ============================================================================
 # FUNCTION CALLING - VALIDATE BOOKING DATETIME
@@ -2110,6 +2170,74 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
     except Exception as e:
         logger.error(f"❌ Exception: {str(e)}")
         return {'success': False, 'message': f'Error: {str(e)}'}
+
+
+# ============================================================================
+# FUNCTION CALLING - UPDATE BOOKING FIELDS HANDLER
+# ============================================================================
+
+def handle_update_booking_fields_function_call(function_args: dict, session_id: str, sender_phone: str) -> dict:
+    """Handle update_booking_fields function call from AI.
+
+    Merges the provided fields into the Redis booking session and returns
+    the updated state so the AI knows what to ask next.
+
+    Args:
+        function_args: Fields provided by AI (pain_point, service, date, time, etc.)
+        session_id: WhatsApp/web session ID for Redis booking session
+        sender_phone: Sender's actual WhatsApp number (for 'this_number' sentinel)
+    """
+    logger.info("="*80)
+    logger.info("📝 HANDLING UPDATE_BOOKING_FIELDS FUNCTION CALL")
+    logger.info(f"   Session: {session_id}")
+    logger.info(f"   Fields from AI: {function_args}")
+    logger.info("="*80)
+
+    try:
+        # Resolve 'this_number' sentinel for phone field
+        cleaned = {}
+        for key, value in function_args.items():
+            if value is not None and value != "":
+                cleaned[key] = value
+
+        if cleaned.get('phone') == 'this_number':
+            # Use the sender's WhatsApp number
+            resolved_phone = sender_phone.replace('@s.whatsapp.net', '')
+            cleaned['phone'] = resolved_phone
+            logger.info(f"   Resolved 'this_number' -> '{resolved_phone}'")
+
+        if not cleaned:
+            return {
+                'success': False,
+                'message': 'No fields provided to update.'
+            }
+
+        # Merge into Redis booking session
+        merge_booking_session(session_id, cleaned)
+        logger.info(f"   Merged fields: {list(cleaned.keys())}")
+
+        # Get updated booking state
+        next_step = get_next_booking_step(session_id)
+        session_data = next_step.get("session", {})
+        missing = booking_missing_fields(session_id)
+
+        logger.info(f"   Next step: {next_step['step']}")
+        logger.info(f"   Missing fields: {missing}")
+
+        return {
+            'success': True,
+            'updated_fields': list(cleaned.keys()),
+            'session': session_data,
+            'next_step': next_step['step'],
+            'missing_fields': missing
+        }
+
+    except Exception as e:
+        logger.error(f"❌ update_booking_fields error: {str(e)}")
+        return {
+            'success': False,
+            'message': f'Error updating booking fields: {str(e)}'
+        }
 
 
 def handle_escalation_function_call(
@@ -3545,7 +3673,7 @@ INSTRUCTIONS:
         # SEQUENTIAL BOOKING FLOW - Guide conversation step by step
         # ===================================================================
         booking_hint = ""
-        raw_user_text = user_message if message_type == 'text' else ""
+        raw_user_text = user_message if message_type in ['text', 'voice', 'audio', 'ptt'] else ""
         is_returning_customer = customer_memory and customer_memory.get('is_returning', False)
 
         # Check current booking flow state FIRST
@@ -3558,31 +3686,13 @@ INSTRUCTIONS:
         # For NEW customers: Always guide through booking flow from greeting
         # For RETURNING customers: Only guide if they've started booking
         has_started_booking = any(session_data.get(f) for f in ["pain_point", "service", "date", "time", "therapist_gender"])
-        should_guide_flow = (not is_returning_customer) or has_started_booking
+        should_guide_flow = True  # Always guide through booking flow step by step
 
         # ===================================================================
-        # BOOKING EXTRACTION - Always extract when flow is active
-        # Let LLM decide what to extract (no keyword dependency)
+        # BOOKING FIELD EXTRACTION is now handled by the update_booking_fields
+        # function call — the conversation AI calls it directly with resolved
+        # values, eliminating the context-blind extract_booking_fields LLM call.
         # ===================================================================
-        if raw_user_text and should_guide_flow and current_step != "complete":
-            logger.info("📅 EXTRACTING BOOKING FIELDS (flow active)...")
-            try:
-                extracted = extract_booking_fields(
-                    raw_user_text,
-                    ai_engine,
-                    phone_fallback=sender_clean,
-                    current_step=current_step
-                )
-                if extracted:
-                    merge_booking_session(session_id, extracted)
-                    logger.info(f"Booking fields extracted: {extracted}")
-
-                    # Re-check step after extraction (might have progressed)
-                    next_step = get_next_booking_step(session_id)
-                    current_step = next_step["step"]
-                    logger.info(f"📋 BOOKING FLOW | After extraction, step: {current_step}")
-            except Exception as e:
-                logger.error(f"Booking extraction error: {e}")
 
         # ===================================================================
         # INJECT BOOKING HINTS - Guide AI to ask ONE question at a time
@@ -3601,6 +3711,7 @@ This is a new customer. Your greeting should:
 Tone: Warm, curious, caring - like asking a friend "最近哪里比较累/酸痛呢？"
 Do NOT ask about service, date, time, or therapist yet.
 Ask ONE question only about their pain/discomfort.
+When the customer describes their pain or concern, call update_booking_fields with the pain_point field.
 """
             elif current_step == "service":
                 # Get pain_point for context (may be null if skipped)
@@ -3614,6 +3725,7 @@ Reference the menu if needed. Recommend based on their situation.
 Tone: Helpful, knowledgeable - suggest what's good for them.
 Do NOT ask about date, time, or therapist yet.
 Ask ONE question only about service preference.
+When the customer indicates their service choice (even contextually like '就这个吧', 'ok can', '好'), call update_booking_fields with the actual service name resolved from context.
 """
             elif current_step == "datetime":
                 booking_hint = """
@@ -3622,12 +3734,14 @@ Service selected. Now ask about preferred DATE and TIME.
 Tone: Accommodating, flexible - "您方便什么时候过来呢？"
 Do NOT ask about therapist preference yet.
 Ask about timing only.
+When the customer provides date/time, call update_booking_fields with date and/or time fields. Resolve relative dates (明天, 后天, this Saturday) to YYYY-MM-DD and natural language times (下午3点) to HH:MM format.
 """
             elif current_step == "therapist_gender":
                 booking_hint = """
 [BOOKING FLOW - STEP 4: THERAPIST PREFERENCE]
 Service and time confirmed. Now ask about THERAPIST GENDER preference.
 Tone: Casual, no pressure - "技师方面有偏好吗？男女都很专业的～"
+When the customer states their preference, call update_booking_fields with therapist_gender ('Male' or 'Female').
 """
             elif current_step == "personal_info":
                 mark_personal_info_asked(session_id)
@@ -3658,6 +3772,7 @@ RULES:
   - "请问您是先生还是女士呢？😊"
 - Ask about ALL THREE (name, gender, phone) in ONE message. Do not split into multiple messages.
 - This is the last step before the final booking confirmation.
+When the customer provides their info, call update_booking_fields with customer_name, customer_gender, and phone. If they say to use their WhatsApp number, pass phone as 'this_number'.
 """
         elif current_step == "complete":
             # All fields collected - prompt AI to confirm
@@ -3703,6 +3818,7 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
             get_escalation_function_definition(),
             get_register_member_function_definition(),
             get_record_booking_function_definition(),
+            get_update_booking_fields_function_definition(),
             get_validate_booking_datetime_function_definition(),
             get_send_menu_image_function_definition(),
             get_track_conversation_info_function_definition(),
@@ -3816,6 +3932,20 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
                         "content": json.dumps(booking_result)
                     })
 
+
+                elif function_name == "update_booking_fields":
+                    update_result = handle_update_booking_fields_function_call(
+                        function_args=function_args,
+                        session_id=session_id,
+                        sender_phone=sender_clean
+                    )
+
+                    function_results.append({
+                        "tool_call_id": tool_call['id'],
+                        "role": "tool",
+                        "name": function_name,
+                        "content": json.dumps(update_result)
+                    })
 
                 elif function_name == "validate_booking_datetime":
                     validation_result = validate_booking_datetime(
