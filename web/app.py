@@ -2207,9 +2207,20 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
             logger.info(f"   Resolved 'this_number' -> '{resolved_phone}'")
 
         if not cleaned:
+            # Empty call is OK - user may have asked off-topic question
+            # Return current state so AI knows what to ask next
+            next_step = get_next_booking_step(session_id)
+            session_data = next_step.get("session", {})
+            missing = booking_missing_fields(session_id)
+            logger.info(f"   No booking data in this message (off-topic question?)")
+            logger.info(f"   Current step remains: {next_step['step']}")
             return {
-                'success': False,
-                'message': 'No fields provided to update.'
+                'success': True,
+                'updated_fields': [],
+                'session': session_data,
+                'next_step': next_step['step'],
+                'missing_fields': missing,
+                'message': 'No booking data in this message. Continue with current step.'
             }
 
         # Merge into Redis booking session
@@ -3705,13 +3716,12 @@ INSTRUCTIONS:
                 mark_pain_point_asked(session_id)
                 booking_hint = """
 [BOOKING FLOW - STEP 1: DISCOVERY]
-This is a new customer. Your greeting should:
-1. Send menu image (call send_menu_image function)
-2. Ask about their PAIN POINT / what's bothering them
-Tone: Warm, curious, caring - like asking a friend "最近哪里比较累/酸痛呢？"
-Do NOT ask about service, date, time, or therapist yet.
-Ask ONE question only about their pain/discomfort.
-When the customer describes their pain or concern, call update_booking_fields with the pain_point field.
+This is a new customer. Send menu image and ask about their pain point.
+
+CRITICAL: Check the customer's CURRENT message. If it describes any pain/discomfort (脚痛/肩膀酸/back pain/tired/累/酸痛), you MUST:
+1. Call update_booking_fields with pain_point="[their concern]"
+2. Then recommend a suitable service
+If this is a greeting only, send menu and ask about their concern.
 """
             elif current_step == "service":
                 # Get pain_point for context (may be null if skipped)
@@ -3720,28 +3730,34 @@ When the customer describes their pain or concern, call update_booking_fields wi
                 booking_hint = f"""
 [BOOKING FLOW - STEP 2: SERVICE SELECTION]
 {pain_note}
-Now guide them to choose a SERVICE/PACKAGE.
-Reference the menu if needed. Recommend based on their situation.
-Tone: Helpful, knowledgeable - suggest what's good for them.
+Guide them to choose a SERVICE/PACKAGE. Recommend based on their situation.
 Do NOT ask about date, time, or therapist yet.
-Ask ONE question only about service preference.
-When the customer indicates their service choice (even contextually like '就这个吧', 'ok can', '好'), call update_booking_fields with the actual service name resolved from context.
+
+CRITICAL: Check the customer's CURRENT message. If they indicate agreement (好/可以/ok/行/就这个/这个可以) or name a specific service, you MUST:
+1. Call update_booking_fields with service="[actual service name from your recommendation]"
+2. Resolve contextual references - if you recommended "90分钟足部按摩" and they say "好", pass service="90分钟足部按摩"
+Only ask about service preference if their message does NOT indicate a choice.
 """
             elif current_step == "datetime":
                 booking_hint = """
 [BOOKING FLOW - STEP 3: DATE & TIME]
 Service selected. Now ask about preferred DATE and TIME.
-Tone: Accommodating, flexible - "您方便什么时候过来呢？"
 Do NOT ask about therapist preference yet.
-Ask about timing only.
-When the customer provides date/time, call update_booking_fields with date and/or time fields. Resolve relative dates (明天, 后天, this Saturday) to YYYY-MM-DD and natural language times (下午3点) to HH:MM format.
+
+CRITICAL: Check the customer's CURRENT message. If it contains any date/time info (明天/后天/周六/3点/下午/today/tomorrow/specific date), you MUST:
+1. Call update_booking_fields with date (YYYY-MM-DD format) and/or time (HH:MM 24h format)
+2. Convert relative dates to actual dates, natural language times to HH:MM
+Only ask about timing if their message does NOT contain date/time info.
 """
             elif current_step == "therapist_gender":
                 booking_hint = """
 [BOOKING FLOW - STEP 4: THERAPIST PREFERENCE]
 Service and time confirmed. Now ask about THERAPIST GENDER preference.
-Tone: Casual, no pressure - "技师方面有偏好吗？男女都很专业的～"
-When the customer states their preference, call update_booking_fields with therapist_gender ('Male' or 'Female').
+
+CRITICAL: Check the customer's CURRENT message. If it mentions therapist gender preference (男/女/男技师/女技师/male/female/先生/女士/都可以), you MUST:
+1. Call update_booking_fields with therapist_gender="Male" or therapist_gender="Female"
+2. If they say "都可以/no preference", pick one and call update_booking_fields
+Only ask about preference if their message does NOT indicate one.
 """
             elif current_step == "personal_info":
                 mark_personal_info_asked(session_id)
@@ -3772,7 +3788,11 @@ RULES:
   - "请问您是先生还是女士呢？😊"
 - Ask about ALL THREE (name, gender, phone) in ONE message. Do not split into multiple messages.
 - This is the last step before the final booking confirmation.
-When the customer provides their info, call update_booking_fields with customer_name, customer_gender, and phone. If they say to use their WhatsApp number, pass phone as 'this_number'.
+
+CRITICAL: Check the customer's CURRENT message. If it contains any personal info (name, gender indication like 男/女/先生/小姐, or phone number), you MUST:
+1. Call update_booking_fields with the fields provided (customer_name, customer_gender, phone)
+2. If they say "use this number/这个号码/my WhatsApp", pass phone="this_number"
+Only ask for info that is still missing.
 """
         elif current_step == "complete":
             # All fields collected - prompt AI to confirm
@@ -3827,8 +3847,21 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
             get_log_cancellation_reason_function_definition()
         ]
 
+        # ===================================================================
+        # OPTION C: Force update_booking_fields during booking flow
+        # This guarantees the function is called to extract booking data
+        # ===================================================================
+        booking_flow_steps = ["pain_point", "service", "datetime", "therapist_gender", "personal_info"]
+        logger.info(f"🔍 DEBUG FORCING: should_guide_flow={should_guide_flow}, current_step={current_step}, in_steps={current_step in booking_flow_steps}")
+        if should_guide_flow and current_step in booking_flow_steps:
+            # Force AI to call update_booking_fields first
+            tool_choice = {"type": "function", "function": {"name": "update_booking_fields"}}
+            logger.info(f"🔒 FORCING update_booking_fields call (step: {current_step})")
+        else:
+            tool_choice = "auto"
+
         # Call AI with function calling enabled
-        ai_response = ai_engine.generate_response(messages_with_memory, tools=tools, tool_choice="auto")
+        ai_response = ai_engine.generate_response(messages_with_memory, tools=tools, tool_choice=tool_choice)
 
         if not ai_response['success']:
             logger.error(f"AI response failed: {ai_response['error']}")
