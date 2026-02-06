@@ -1215,6 +1215,24 @@ Example: "Female therapist, 90min body massage, evening slots"
         if re.match(r'^\d{4}-\d{2}-\d{2}$', date_str):
             return date_str
 
+        # English month names: "february 16" / "16 february" / "feb 16"
+        MONTHS = {
+            'january': 1, 'jan': 1, 'february': 2, 'feb': 2, 'march': 3, 'mar': 3,
+            'april': 4, 'apr': 4, 'may': 5, 'june': 6, 'jun': 6,
+            'july': 7, 'jul': 7, 'august': 8, 'aug': 8, 'september': 9, 'sep': 9,
+            'october': 10, 'oct': 10, 'november': 11, 'nov': 11, 'december': 12, 'dec': 12,
+        }
+        m1 = re.match(r'([a-z]+)\s+(\d{1,2})', date_str)
+        if m1 and m1.group(1) in MONTHS:
+            month = MONTHS[m1.group(1)]
+            day = int(m1.group(2))
+            return f'{today.year}-{month:02d}-{day:02d}'
+        m2 = re.match(r'(\d{1,2})\s+([a-z]+)', date_str)
+        if m2 and m2.group(2) in MONTHS:
+            day = int(m2.group(1))
+            month = MONTHS[m2.group(2)]
+            return f'{today.year}-{month:02d}-{day:02d}'
+
         # Chinese: 2025年12月28日 or 12月28日
         cn_full = re.match(r'(\d{4})年(\d{1,2})月(\d{1,2})日', date_str)
         if cn_full:
@@ -1252,6 +1270,17 @@ Example: "Female therapist, 90min body massage, evening slots"
             elif period.upper() == 'AM' and h == 12:
                 h = 0
             return f'{h:02d}:{m}'
+
+        # "6pm" / "6 pm" / "6am" / "6 am" (no colon)
+        bare_match = re.match(r'(\d{1,2})\s*(pm|am)', time_str, re.IGNORECASE)
+        if bare_match:
+            h, period = bare_match.groups()
+            h = int(h)
+            if period.upper() == 'PM' and h != 12:
+                h += 12
+            elif period.upper() == 'AM' and h == 12:
+                h = 0
+            return f'{h:02d}:00'
 
         # Chinese: 下午3点10分 / 晚上8点
         cn_match = re.match(r'(上午|下午|晚上|早上)?(\d{1,2})[点时](?:(\d{1,2})分?)?', time_str)

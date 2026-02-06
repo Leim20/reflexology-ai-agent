@@ -1193,62 +1193,106 @@ def get_record_booking_function_definition():
 
 
 # ============================================================================
-# FUNCTION CALLING - UPDATE BOOKING FIELDS (replaces extract_booking_fields)
+# FUNCTION CALLING - UPDATE BOOKING FIELDS (MCQ-BASED - NO HALLUCINATION)
 # ============================================================================
 
+# Service menu - ENUM list for MCQ-style extraction
+# Update this list when menu changes
+BOOKING_SERVICES_ENUM = [
+    "足部按摩 - 基础护理 (60分钟)",
+    "足部按摩 - 进阶护理 (70分钟)",
+    "足部按摩 - 完整护理 (90分钟)",
+    "香薰身体按摩 - 基础护理 (60分钟)",
+    "香薰身体按摩 - 基础护理 (90分钟)",
+    "香薰身体按摩 - 完整护理 (120分钟)",
+]
+
 def get_update_booking_fields_function_definition():
-    """Define update_booking_fields function for OpenAI function calling.
-    Called by the conversation AI to save booking fields as the customer provides them."""
+    """
+    MCQ-style function definition - LLM can ONLY pick from valid options.
+    This eliminates hallucination by constraining outputs to predefined enums.
+
+    Field types:
+    - ENUM fields (MCQ): service, therapist_gender, customer_gender, message_type
+    - Structured extraction: date, time, phone
+    - Free-form: customer_name, pain_point
+    """
     return {
         "type": "function",
         "function": {
             "name": "update_booking_fields",
-            "description": (
-                "Save booking information provided by the customer during the booking flow. "
-                "Call this IMMEDIATELY whenever the customer provides any booking-related info "
-                "(pain point, service choice, date, time, therapist preference, name, gender, phone). "
-                "You may set multiple fields in one call if the customer provides several at once (e.g. '明天下午3点' = date + time). "
-                "IMPORTANT: Resolve contextual references before calling. If the customer says '就这个吧' (this one) or "
-                "'ok can' or '好' after you recommended a service, pass the actual service name you recommended, not the raw text. "
-                "For phone: if the customer says 'use this number' or '就这个号码', pass the sentinel value 'this_number'."
-            ),
+            "description": """Analyze customer message and extract booking information.
+
+CRITICAL RULES:
+1. ALWAYS set message_type first - classify what the customer is doing:
+   - BOOKING_DATA: Customer is providing booking info (date, time, service choice, name, etc.)
+   - FAQ: Customer is asking a question (hours, prices, location, therapist info, etc.)
+   - CONFIRMATION: Customer is confirming/agreeing (好/是的/对/ok/yes/confirm)
+   - OTHER: Off-topic or unclear
+
+2. For ENUM fields (service, therapist_gender, customer_gender):
+   - Pick the BEST match from allowed options using SEMANTIC understanding
+   - User may describe it differently - match by meaning, not exact words
+   - Examples:
+     * "我要按脚的90分钟" → "足部按摩 - 完整护理 (90分钟)"
+     * "body massage最长的那个" → "香薰身体按摩 - 完整护理 (120分钟)"
+     * "便宜一点的脚底按摩" → "足部按摩 - 基础护理 (60分钟)"
+   - If unclear or not mentioned, use null
+
+3. For date/time: Convert natural language to exact format
+   - 今天 → today's YYYY-MM-DD
+   - 明天 → tomorrow's YYYY-MM-DD
+   - 下午3点 → 15:00
+   - 6pm → 18:00
+
+4. ONLY extract what customer ACTUALLY said. If they asked FAQ, set message_type=FAQ and leave other fields null.
+
+5. For phone: Use 'this_number' if customer says "用这个号码/this number/我的WhatsApp".""",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "pain_point": {
+                    "message_type": {
                         "type": "string",
-                        "description": "Customer's pain point or concern (e.g. '肩膀酸痛', 'lower back pain', 'just want to relax')"
+                        "enum": ["BOOKING_DATA", "FAQ", "CONFIRMATION", "OTHER"],
+                        "description": "REQUIRED: Classify customer's message intent. BOOKING_DATA=providing info, FAQ=asking question, CONFIRMATION=agreeing, OTHER=off-topic"
                     },
                     "service": {
-                        "type": "string",
-                        "description": "Service name and duration as shown on the menu (e.g. '90分钟足部按摩', '120min body massage'). Resolve contextual replies like '就这个吧' to the actual service name."
-                    },
-                    "date": {
-                        "type": "string",
-                        "description": "Booking date in YYYY-MM-DD format. Resolve relative dates (明天, 后天, this Saturday) to actual dates."
-                    },
-                    "time": {
-                        "type": "string",
-                        "description": "Booking time in HH:MM 24-hour format (e.g. '14:00', '09:30'). Resolve natural language (下午3点 = 15:00)."
+                        "type": ["string", "null"],
+                        "enum": BOOKING_SERVICES_ENUM + [None],
+                        "description": "Map customer's service request to exact menu item using semantic understanding. Customer may say '按脚90分钟' or 'foot massage longest one' - match to correct option."
                     },
                     "therapist_gender": {
-                        "type": "string",
-                        "description": "Therapist gender preference. Must be 'Male' or 'Female'. Recognize: 男技师/男师傅 = 'Male', 女技师/女师傅 = 'Female'."
-                    },
-                    "customer_name": {
-                        "type": "string",
-                        "description": "Customer's name as provided by them."
+                        "type": ["string", "null"],
+                        "enum": ["Male", "Female", None],
+                        "description": "Therapist preference. 男/男技师/男师傅/male therapist→Male, 女/女技师/女师傅/female therapist→Female. null if not mentioned."
                     },
                     "customer_gender": {
-                        "type": "string",
-                        "description": "Customer's gender. Must be 'Male' or 'Female'. Recognize: 男/先生 = 'Male', 女/女士 = 'Female'."
+                        "type": ["string", "null"],
+                        "enum": ["Male", "Female", None],
+                        "description": "Customer's OWN gender (self-referential only). 我是男/我是男生/I am male→Male, 我是女/我是女生/I am female→Female. null if not mentioned."
+                    },
+                    "date": {
+                        "type": ["string", "null"],
+                        "description": "Booking date in YYYY-MM-DD format. Convert relative dates: 今天=today, 明天=tomorrow, 后天=day after, 周六=this Saturday. null if not mentioned."
+                    },
+                    "time": {
+                        "type": ["string", "null"],
+                        "description": "Booking time in HH:MM 24h format. Convert: 下午3点=15:00, 晚上8点=20:00, 6pm=18:00, morning=10:00. null if not mentioned."
+                    },
+                    "customer_name": {
+                        "type": ["string", "null"],
+                        "description": "Customer's name exactly as stated. null if not provided."
                     },
                     "phone": {
-                        "type": "string",
-                        "description": "Customer's phone number (digits only). Use sentinel 'this_number' if customer says to use their WhatsApp number."
+                        "type": ["string", "null"],
+                        "description": "Phone number (digits only) or 'this_number' sentinel if customer says to use their WhatsApp. null if not provided."
+                    },
+                    "pain_point": {
+                        "type": ["string", "null"],
+                        "description": "Customer's pain/discomfort/concern. e.g. '肩膀酸痛', 'lower back pain', 'just want to relax'. null if not mentioned."
                     }
                 },
-                "required": []
+                "required": ["message_type"]
             }
         }
     }
@@ -2005,13 +2049,8 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
             logger.info(f"✅ AUTO-DETECT: Booking recorded successfully! Row {result['row']}")
 
 
-            # Clear Redis booking session after successful recording
-            if session_id:
-                try:
-                    clear_booking_session(session_id)
-                    logger.info("📦 AUTO-DETECT: Redis booking session cleared after successful recording")
-                except Exception as e:
-                    logger.error(f"📦 AUTO-DETECT: Failed to clear Redis booking session: {e}")
+            # NOTE: Session clearing handled by webhook handler after AI response
+            # to prevent flow reset before confirmation is complete
 
             # Add marker to conversation so booking flow doesn't re-trigger
             if session_id and conversation_manager:
@@ -2044,27 +2083,48 @@ def auto_detect_and_record_booking(assistant_message: str, sender_phone: str, se
 def handle_record_booking_function_call(function_args: dict, sender_phone: str = None, session_id: str = None) -> dict:
     """Handle record_booking function call from AI
 
+    MCQ-based confirmation gate:
+    1. Validate all required fields exist in Redis session
+    2. Block recording if any required field is missing
+    3. Use Redis session as source of truth (MCQ-validated data)
+
     Args:
         function_args: Arguments from AI function call
         sender_phone: Actual sender's phone from webhook (used as fallback if AI passes invalid phone)
         session_id: WhatsApp session ID for Redis booking session cross-check
     """
     logger.info("="*80)
-    logger.info("📅 HANDLING BOOKING RECORDING FUNCTION CALL")
+    logger.info("📅 HANDLING BOOKING RECORDING FUNCTION CALL (MCQ-GATED)")
     logger.info("="*80)
 
     # ===================================================================
-    # REDIS CROSS-CHECK: Override AI tool args with Redis session values
-    # Redis session contains fields extracted from what user actually said
-    # This fixes the name bug (AI using profile name instead of stated name)
+    # CONFIRMATION GATE: Validate Redis session has all required fields
+    # This prevents AI from recording incomplete bookings
     # ===================================================================
     redis_session = {}
     if session_id:
         try:
             redis_session = get_booking_session(session_id)
             logger.info(f"Redis booking session: {redis_session}")
+
+            # Check for missing required fields
+            required_fields = ['customer_name', 'customer_gender', 'phone', 'date', 'time', 'service', 'therapist_gender']
+            missing = [f for f in required_fields if not redis_session.get(f)]
+
+            if missing:
+                logger.warning(f"⛔ CONFIRMATION GATE BLOCKED: Missing required fields: {missing}")
+                return {
+                    'success': False,
+                    'error': 'INCOMPLETE_BOOKING',
+                    'missing_fields': missing,
+                    'message': f'Cannot record booking. Still missing: {missing}. Please collect this information from the customer first.'
+                }
+
+            logger.info("✅ CONFIRMATION GATE PASSED: All required fields present")
+
         except Exception as e:
             logger.error(f"Failed to read Redis booking session: {e}")
+    # ===================================================================
 
     # Field mapping: Redis field -> function_args field
     redis_to_args = {
@@ -2079,10 +2139,16 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
 
     for redis_field, args_field in redis_to_args.items():
         redis_val = redis_session.get(redis_field)
-        if redis_val is not None:
-            tool_val = function_args.get(args_field, '')
-            if redis_val != tool_val:
-                logger.info(f"REDIS OVERRIDE {args_field}: tool='{tool_val}' -> redis='{redis_val}'")
+        tool_val = function_args.get(args_field, '')
+        # Only use Redis value if AI passed empty/invalid value
+        # If AI passed a valid value, trust it (user may have modified)
+        if tool_val and tool_val.lower() not in ['', 'unknown', 'null', 'none']:
+            # AI has valid value, keep it
+            if redis_val and redis_val != tool_val:
+                logger.info(f"KEEPING AI VALUE {args_field}: ai='{tool_val}' (redis was '{redis_val}')")
+        elif redis_val is not None:
+            # AI has no value, use Redis
+            logger.info(f"REDIS FALLBACK {args_field}: '{redis_val}'")
             function_args[args_field] = redis_val
     # ===================================================================
 
@@ -2144,13 +2210,8 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
         if result['success']:
             logger.info(f"✅ Booking recorded: Row {result['row']}")
 
-            # Clear Redis booking session after successful recording
-            if session_id:
-                try:
-                    clear_booking_session(session_id)
-                    logger.info("Redis booking session cleared after successful recording")
-                except Exception as e:
-                    logger.error(f"Failed to clear Redis booking session: {e}")
+            # NOTE: Session clearing moved to AFTER second AI call (see webhook handler)
+            # to prevent empty session during confirmation message generation
 
             # Send notification to Daniel
             send_booking_notification(
@@ -2163,7 +2224,19 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
                 therapist_gender=therapist_gender
             )
 
-            return {'success': True, 'message': f"Booking recorded in row {result['row']}"}
+            return {
+                'success': True,
+                'message': f"Booking recorded in row {result['row']}",
+                'booking_details': {
+                    'customer_name': customer_name,
+                    'customer_gender': customer_gender,
+                    'customer_phone': customer_phone,
+                    'booking_date': booking_date,
+                    'booking_time': booking_time,
+                    'service': service,
+                    'therapist_gender': therapist_gender
+                }
+            }
         else:
             return {'success': False, 'message': result['message']}
 
@@ -2173,57 +2246,112 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
 
 
 # ============================================================================
-# FUNCTION CALLING - UPDATE BOOKING FIELDS HANDLER
+# FUNCTION CALLING - UPDATE BOOKING FIELDS HANDLER (MCQ-BASED)
 # ============================================================================
 
 def handle_update_booking_fields_function_call(function_args: dict, session_id: str, sender_phone: str) -> dict:
     """Handle update_booking_fields function call from AI.
 
-    Merges the provided fields into the Redis booking session and returns
-    the updated state so the AI knows what to ask next.
+    MCQ-based approach:
+    1. Check message_type first - only save data if BOOKING_DATA or CONFIRMATION
+    2. For FAQ/OTHER, don't save anything - just return current state
+    3. Validate enum fields are from allowed values
+    4. Merge validated fields into Redis booking session
 
     Args:
-        function_args: Fields provided by AI (pain_point, service, date, time, etc.)
+        function_args: Fields from AI including message_type classification
         session_id: WhatsApp/web session ID for Redis booking session
         sender_phone: Sender's actual WhatsApp number (for 'this_number' sentinel)
     """
     logger.info("="*80)
-    logger.info("📝 HANDLING UPDATE_BOOKING_FIELDS FUNCTION CALL")
+    logger.info("📝 HANDLING UPDATE_BOOKING_FIELDS FUNCTION CALL (MCQ-BASED)")
     logger.info(f"   Session: {session_id}")
     logger.info(f"   Fields from AI: {function_args}")
     logger.info("="*80)
 
     try:
-        # Resolve 'this_number' sentinel for phone field
-        cleaned = {}
-        for key, value in function_args.items():
-            if value is not None and value != "":
-                cleaned[key] = value
+        # Step 1: Check message_type classification
+        message_type = function_args.get('message_type', 'OTHER')
+        logger.info(f"   Message Type: {message_type}")
 
-        if cleaned.get('phone') == 'this_number':
-            # Use the sender's WhatsApp number
-            resolved_phone = sender_phone.replace('@s.whatsapp.net', '')
-            cleaned['phone'] = resolved_phone
-            logger.info(f"   Resolved 'this_number' -> '{resolved_phone}'")
-
-        if not cleaned:
-            # Empty call is OK - user may have asked off-topic question
-            # Return current state so AI knows what to ask next
+        # Step 2: If FAQ or OTHER, don't save any booking data
+        if message_type in ['FAQ', 'OTHER']:
             next_step = get_next_booking_step(session_id)
             session_data = next_step.get("session", {})
             missing = booking_missing_fields(session_id)
-            logger.info(f"   No booking data in this message (off-topic question?)")
+            logger.info(f"   Message is {message_type} - NOT saving any booking data")
             logger.info(f"   Current step remains: {next_step['step']}")
             return {
                 'success': True,
+                'message_type': message_type,
                 'updated_fields': [],
                 'session': session_data,
                 'next_step': next_step['step'],
                 'missing_fields': missing,
-                'message': 'No booking data in this message. Continue with current step.'
+                'message': f'Customer asked {message_type}. Answer their question and continue booking flow.'
             }
 
-        # Merge into Redis booking session
+        # Step 3: For BOOKING_DATA or CONFIRMATION, extract and validate fields
+        # Fields to save (exclude message_type from storage)
+        booking_fields = ['service', 'therapist_gender', 'customer_gender', 'date', 'time',
+                         'customer_name', 'phone', 'pain_point']
+
+        cleaned = {}
+        for key in booking_fields:
+            value = function_args.get(key)
+            if value is not None and value != "" and value != "null":
+                cleaned[key] = value
+
+        # Validate enum fields
+        if cleaned.get('service') and cleaned['service'] not in BOOKING_SERVICES_ENUM:
+            logger.warning(f"   Invalid service '{cleaned['service']}' - not in menu enum, rejecting")
+            del cleaned['service']
+
+        if cleaned.get('therapist_gender') and cleaned['therapist_gender'] not in ['Male', 'Female']:
+            logger.warning(f"   Invalid therapist_gender '{cleaned['therapist_gender']}' - rejecting")
+            del cleaned['therapist_gender']
+
+        if cleaned.get('customer_gender') and cleaned['customer_gender'] not in ['Male', 'Female']:
+            logger.warning(f"   Invalid customer_gender '{cleaned['customer_gender']}' - rejecting")
+            del cleaned['customer_gender']
+
+        # Resolve 'this_number' sentinel for phone field
+        if cleaned.get('phone') == 'this_number':
+            resolved_phone = sender_phone.replace('@s.whatsapp.net', '')
+            cleaned['phone'] = resolved_phone
+            logger.info(f"   Resolved 'this_number' -> '{resolved_phone}'")
+
+        # Step 4: Handle empty extraction (CONFIRMATION without new data)
+        if not cleaned:
+            next_step = get_next_booking_step(session_id)
+            session_data = next_step.get("session", {})
+            missing = booking_missing_fields(session_id)
+
+            if message_type == 'CONFIRMATION':
+                logger.info(f"   CONFIRMATION received - checking if ready to record")
+                return {
+                    'success': True,
+                    'message_type': 'CONFIRMATION',
+                    'updated_fields': [],
+                    'session': session_data,
+                    'next_step': next_step['step'],
+                    'missing_fields': missing,
+                    'ready_to_record': len(missing) == 0,
+                    'message': 'Customer confirmed. Ready to record booking.' if len(missing) == 0 else f'Customer confirmed but still missing: {missing}'
+                }
+            else:
+                logger.info(f"   No booking data extracted from BOOKING_DATA message")
+                return {
+                    'success': True,
+                    'message_type': message_type,
+                    'updated_fields': [],
+                    'session': session_data,
+                    'next_step': next_step['step'],
+                    'missing_fields': missing,
+                    'message': 'No valid booking data found in message.'
+                }
+
+        # Step 5: Merge validated fields into Redis booking session
         merge_booking_session(session_id, cleaned)
         logger.info(f"   Merged fields: {list(cleaned.keys())}")
 
@@ -2237,10 +2365,12 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
 
         return {
             'success': True,
+            'message_type': message_type,
             'updated_fields': list(cleaned.keys()),
             'session': session_data,
             'next_step': next_step['step'],
-            'missing_fields': missing
+            'missing_fields': missing,
+            'ready_to_record': len(missing) == 0 and next_step['step'] == 'complete'
         }
 
     except Exception as e:
@@ -3664,10 +3794,9 @@ CUSTOMER MEMORY CONTEXT:
 
 INSTRUCTIONS:
 - Acknowledge returning customer naturally (e.g., "Welcome back!")
-- Reference their previous interests/preferences when relevant
-- Provide personalized recommendations based on history
-- Don't repeat information they already know
+- Reference their previous interests/preferences in CONVERSATION only (e.g., "上次您做了足部按摩，感觉怎么样？")
 - Be friendly and show you remember them
+- ⚠️ Do NOT use memory to pre-fill booking fields via update_booking_fields. Every new booking MUST follow the step-by-step flow and ask each question individually.
 """
                 }
 
@@ -3716,7 +3845,9 @@ INSTRUCTIONS:
                 mark_pain_point_asked(session_id)
                 booking_hint = """
 [BOOKING FLOW - STEP 1: DISCOVERY]
-This is a new customer. Send menu image and ask about their pain point.
+⚠️ This is a NEW booking session. Even if the customer is returning, you MUST follow the full booking flow step by step.
+Do NOT skip any step. Do NOT assume or pre-fill service/date/time/therapist from previous bookings or memory.
+Send menu image and ask about their pain point or what service they're interested in.
 
 CRITICAL: Check the customer's CURRENT message. If it describes any pain/discomfort (脚痛/肩膀酸/back pain/tired/累/酸痛), you MUST:
 1. Call update_booking_fields with pain_point="[their concern]"
@@ -3809,8 +3940,9 @@ Only ask for info that is still missing.
 
             booking_hint = f"""
 [BOOKING FLOW - STEP 5: CONFIRM BOOKING]
-All booking info collected! Summarize and confirm with customer.
-Booking details:
+All booking info collected!
+
+Current booking details in system:
 - Name: {summary.get('customer_name', 'N/A')}
 - Gender: {display_customer_gender}
 - Phone: {summary.get('phone', 'N/A')}
@@ -3819,10 +3951,28 @@ Booking details:
 - Time: {summary.get('time', 'N/A')}
 - Therapist: {display_therapist_gender}
 
-Tone: Professional but warm - confirm naturally, not like a receipt.
-Do NOT mention pain_point in confirmation.
-After customer confirms, you MUST call the record_booking function to save this booking.
-IMPORTANT: Every booking requires its own record_booking call. Even if you have called record_booking before for a previous booking, you MUST call it again for this new booking. Do NOT skip calling record_booking.
+🔍 CHECK the customer's CURRENT message and decide:
+
+📌 CASE A - Customer is CONFIRMING (是/对/OK/correct/没问题/确认/好的/可以):
+   → Call record_booking() with ALL the booking details above to save the booking.
+
+📌 CASE B - Customer is MODIFYING (改成.../换个.../change to.../不对/想改...):
+   → Call update_booking_fields() with the changed field(s).
+   → Then show the UPDATED confirmation again (use values from the function result, not the old values above) and ask "请确认以上信息是否正确？"
+
+📌 CASE C - This is the FIRST TIME showing confirmation (customer just provided the last piece of info):
+   → Display the booking details and ask "请确认以上信息是否正确？"
+   → Do NOT call record_booking() yet.
+   → Response format:
+     好的，[Name]！让我确认您的预约信息：
+     • 姓名：[Name]
+     • 性别：[Gender]
+     • 电话：[Phone]
+     • 预约日期：[Date]
+     • 预约时间：[Time — use "X:XX AM/PM" format]
+     • 按摩服务：[Service]
+     • 技师：[Therapist]
+     请确认以上信息是否正确？😊
 """
             logger.info("✅ BOOKING FLOW COMPLETE - Ready for confirmation")
         # ===================================================================
@@ -3848,17 +3998,20 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
         ]
 
         # ===================================================================
-        # OPTION C: Force update_booking_fields during booking flow
-        # This guarantees the function is called to extract booking data
+        # MCQ-BASED APPROACH: Never force function calls
+        # The AI will call update_booking_fields with message_type classification
+        # which tells us whether to save data or not. No hallucination possible.
         # ===================================================================
         booking_flow_steps = ["pain_point", "service", "datetime", "therapist_gender", "personal_info"]
-        logger.info(f"🔍 DEBUG FORCING: should_guide_flow={should_guide_flow}, current_step={current_step}, in_steps={current_step in booking_flow_steps}")
-        if should_guide_flow and current_step in booking_flow_steps:
-            # Force AI to call update_booking_fields first
-            tool_choice = {"type": "function", "function": {"name": "update_booking_fields"}}
-            logger.info(f"🔒 FORCING update_booking_fields call (step: {current_step})")
-        else:
-            tool_choice = "auto"
+        logger.info(f"🔍 MCQ MODE: should_guide_flow={should_guide_flow}, current_step={current_step}")
+
+        # Always use "auto" - let AI decide naturally based on message content
+        # The MCQ-based function definition ensures:
+        # 1. AI classifies message_type (FAQ/BOOKING_DATA/CONFIRMATION/OTHER)
+        # 2. Handler only saves data when message_type is BOOKING_DATA
+        # 3. No hallucination because enum fields constrain output
+        tool_choice = "auto"
+        logger.info(f"🎯 MCQ MODE - tool_choice=auto (AI decides based on message content)")
 
         # Call AI with function calling enabled
         ai_response = ai_engine.generate_response(messages_with_memory, tools=tools, tool_choice=tool_choice)
@@ -3880,6 +4033,14 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
 
             # Process function calls
             function_results = []
+            booking_result = None
+
+            # Check if AI is trying to call both update_booking_fields and record_booking
+            # If so, block record_booking - user must confirm after update
+            tool_names = [tc['function']['name'] for tc in tool_calls]
+            has_update_and_record = 'update_booking_fields' in tool_names and 'record_booking' in tool_names
+            if has_update_and_record:
+                logger.warning("⚠️ AI tried to call both update_booking_fields and record_booking - blocking record_booking")
 
             for tool_call in tool_calls:
                 function_name = tool_call['function']['name']
@@ -3942,11 +4103,20 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
                     })
 
                 elif function_name == "record_booking":
-                    booking_result = handle_record_booking_function_call(
-                        function_args=function_args,
-                        sender_phone=sender,  # Pass actual sender's phone to fix "Unknown" phone bug
-                        session_id=session_id  # Pass session ID for Redis booking cross-check
-                    )
+                    # Block record_booking if update_booking_fields was also called
+                    # User must confirm changes before booking is recorded
+                    if has_update_and_record:
+                        logger.warning("⚠️ Skipping record_booking - user must confirm after update")
+                        booking_result = {
+                            'success': False,
+                            'message': 'Booking update detected. Please ask customer to confirm before recording.'
+                        }
+                    else:
+                        booking_result = handle_record_booking_function_call(
+                            function_args=function_args,
+                            sender_phone=sender,  # Pass actual sender's phone to fix "Unknown" phone bug
+                            session_id=session_id  # Pass session ID for Redis booking cross-check
+                        )
 
                     # Insert conversation separator after successful booking
                     # This tells the AI that any future booking is NEW and needs its own record_booking call
@@ -4140,6 +4310,14 @@ IMPORTANT: Every booking requires its own record_booking call. Even if you have 
                 return jsonify({'success': True}), 200
 
             assistant_message = final_response['content']
+
+            # Clear Redis booking session AFTER AI generates success message
+            if booking_result and booking_result.get("success") and session_id:
+                try:
+                    clear_booking_session(session_id)
+                    logger.info("Redis booking session cleared after final AI response")
+                except Exception as e:
+                    logger.error(f"Failed to clear Redis booking session: {e}")
 
             # Parse AI language choice and clean [CALL ...] from response
             ai_parsed_language = parse_menu_call_language(assistant_message)

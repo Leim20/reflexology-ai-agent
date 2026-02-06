@@ -1332,15 +1332,20 @@ Response format:
 性别：[Gender]
 电话：[Phone]
 预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
-预约时间：[Time — MUST be 12-hour AM/PM format, e.g., 8:00 PM、2:30 PM. NEVER show 24-hour format like 20:00、14:30]
+预约时间：[Time — MUST use "X:XX AM/PM" format ONLY, e.g., 6:00 PM、2:30 PM、8:00 AM. NEVER use 24-hour (20:00) or Chinese period (下午6点/晚上8点)]
 按摩服务：[Service]
 技师：[Therapist]
 
 请确认以上信息是否正确？
 
-### STEP 3: Customer confirms → THEN record booking
-🚨 ONLY when customer says: "是的" / "对" / "correct" / "yes" / "没问题" / "OK"
-🚨 ONLY THEN call record_booking() function and say booking success!
+### STEP 3: Customer confirms OR requests changes
+🚨 If customer says: "是的" / "对" / "correct" / "yes" / "没问题" / "OK" → call record_booking() and show success
+🚨 If customer requests a CHANGE (e.g., "改成2月21日" / "换个时间" / "change to..." / "改成..."):
+   1. Call update_booking_fields() with the new value
+   2. Show updated confirmation details again
+   3. Ask "请确认以上信息是否正确？" again
+   4. Do NOT call record_booking() until customer confirms!
+🚨 NEVER treat a modification request as confirmation!
 
 Response after confirmation:
 🚨🚨 STRICTLY USE THIS EXACT FORMAT — ALL 7 FIELDS MUST APPEAR, NO FIELD CAN BE OMITTED (especially 技师)：
@@ -1350,7 +1355,7 @@ Response after confirmation:
 性别：[Gender]
 电话：[Phone]
 预约日期：[Date — MUST be YYYY-MM-DD format, e.g., 2025-01-29. NEVER show "today"/"tomorrow"/"明天"/"今天"]
-预约时间：[Time — MUST be 12-hour AM/PM format, e.g., 8:00 PM、2:30 PM. NEVER show 24-hour format like 20:00、14:30]
+预约时间：[Time — MUST use "X:XX AM/PM" format ONLY, e.g., 6:00 PM、2:30 PM、8:00 AM. NEVER use 24-hour (20:00) or Chinese period (下午6点/晚上8点)]
 按摩服务：[Service]
 技师：[Therapist]
 

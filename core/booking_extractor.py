@@ -36,8 +36,8 @@ Return a JSON object with these fields (use null for anything NOT explicitly men
   "customer_gender": "string or null - 'Male' or 'Female' ONLY if the customer explicitly states THEIR OWN gender (e.g. '我是男生', '我是女的', 'I am male')",
   "pain_point": "string or null - body part that hurts/is tired (e.g. 'shoulder', 'back', 'legs', '肩膀', '背部', '腰')",
   "service": "string or null - e.g. 'foot reflexology', 'body massage', '90min body massage', '足部60分钟', '香薰疗法'",
-  "date": "string or null - e.g. 'tomorrow', '明天', '后天', 'this Saturday', '星期六'",
-  "time": "string or null - e.g. '5pm', '17:00', 'afternoon', '下午3点', '晚上8点'",
+  "date": "YYYY-MM-DD or null - convert relative dates using today={today}. e.g. 'tomorrow'→'{tomorrow}', 'this Saturday'→calculate from {today}. '明天'→'{tomorrow}', '后天'→calculate",
+  "time": "HH:MM (24h) or null - convert to 24h format. e.g. '5pm'→'17:00', '6pm'→'18:00', '下午3点'→'15:00', '晚上8点'→'20:00'",
   "therapist_gender": "string or null - 'Male' or 'Female' if the customer states a preference for therapist gender (e.g. '男的', '女的', '要男技师', 'female therapist', 'male')",
   "phone": "string or null - ONLY if user typed a phone number"
 }}
@@ -74,7 +74,11 @@ def extract_booking_fields(message: str, ai_engine, phone_fallback: Optional[str
     Returns:
         dict with extracted fields (None for unmentioned fields)
     """
-    prompt = EXTRACTION_PROMPT.format(message=message)
+    from datetime import datetime, timedelta
+    today = datetime.now()
+    today_str = today.strftime("%Y-%m-%d")
+    tomorrow_str = (today + timedelta(days=1)).strftime("%Y-%m-%d")
+    prompt = EXTRACTION_PROMPT.format(message=message, today=today_str, tomorrow=tomorrow_str)
 
     # Add step context for disambiguation
     if current_step:
