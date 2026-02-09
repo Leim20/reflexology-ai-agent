@@ -77,6 +77,8 @@ class Config:
             'OPENAI_API_KEY': os.getenv('OPENAI_API_KEY'),
             'WHAPI_API_TOKEN': os.getenv('WHAPI_API_TOKEN'),
             'WHAPI_CHANNEL_ID': os.getenv('WHAPI_CHANNEL_ID'),
+            'WHAPI_BROADCAST_TOKEN': os.getenv('WHAPI_BROADCAST_TOKEN'),
+            'WHAPI_BROADCAST_CHANNEL_ID': os.getenv('WHAPI_BROADCAST_CHANNEL_ID'),
             'WEBHOOK_URL': os.getenv('WEBHOOK_URL'),
             'FLASK_SECRET_KEY': os.getenv('FLASK_SECRET_KEY'),
             'CHATWOOT_API_ACCESS_TOKEN': os.getenv('CHATWOOT_API_ACCESS_TOKEN'),

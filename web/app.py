@@ -61,6 +61,7 @@ escalation_tool = None
 lead_manager = None
 follow_up_manager = None  # Follow-up campaign manager
 broadcast_manager = None  # Scheduled broadcast manager
+broadcast_whatsapp_handler = None  # Separate WhatsApp handler for broadcasts
 anti_spam_manager = None  # Anti-spam protection system
 webhook_validator = None  # Webhook signature verification
 logger = None
@@ -408,6 +409,17 @@ def init_app():
         if whapi_token and not whapi_token.startswith('{{'):
             whatsapp_handler = WhatsAppHandler(api_token=whapi_token)
             logger.info("✓ WhatsApp Handler initialized")
+            
+            # Initialize Broadcast WhatsApp Handler (separate number for blasting)
+            # NO FALLBACK - broadcast only works with dedicated broadcast token
+            global broadcast_whatsapp_handler
+            broadcast_token = config.get_env('WHAPI_BROADCAST_TOKEN')
+            if broadcast_token and broadcast_token.strip():
+                broadcast_whatsapp_handler = WhatsAppHandler(api_token=broadcast_token)
+                logger.info("✓ Broadcast WhatsApp Handler initialized (separate number)")
+            else:
+                broadcast_whatsapp_handler = None  # No fallback - broadcast disabled
+                logger.warning("⚠️ Broadcast DISABLED - WHAPI_BROADCAST_TOKEN not set")
         else:
             logger.warning("WhatsApp enabled but WHAPI_API_TOKEN not configured")
 
@@ -573,7 +585,7 @@ def init_app():
         logger.warning("⚠️  Follow-up scheduler jobs not registered (missing dependencies)")
 
     # Register broadcast scheduler job
-    if broadcast_manager and whatsapp_handler:
+    if broadcast_manager and broadcast_whatsapp_handler:
         # Job 3: Check and send scheduled broadcasts (every 1 minute)
         scheduler.add_job(
             func=check_and_send_broadcasts_job,
@@ -876,7 +888,7 @@ def booking_reminder_job():
 
                 # Send via WhatsApp
                 logger.info(f"📤 Sending reminder to {name} ({phone}) for {booking_time} appointment")
-                result = whatsapp_handler.send_message(to=phone, message=message)
+                result = broadcast_whatsapp_handler.send_message(to=phone, message=message)
 
                 if result.get('success'):
                     # Mark as sent
@@ -903,7 +915,7 @@ def check_and_send_broadcasts_job():
     Supports both text and image broadcasts
     """
     try:
-        if not broadcast_manager or not whatsapp_handler:
+        if not broadcast_manager or not broadcast_whatsapp_handler:
             return
 
         logger.debug("[SCHEDULER] Checking for pending broadcasts...")
@@ -924,7 +936,7 @@ def check_and_send_broadcasts_job():
 
             def send_whatsapp_message(phone: str, message: str) -> bool:
                 try:
-                    result = whatsapp_handler.send_message(to=phone, message=message)
+                    result = broadcast_whatsapp_handler.send_message(to=phone, message=message)
                     return result.get("success", False)
                 except Exception as e:
                     logger.error(f"Error sending WhatsApp message to {phone}: {e}")
@@ -932,7 +944,7 @@ def check_and_send_broadcasts_job():
 
             def send_whatsapp_image(phone: str, image_url: str, caption: str = "") -> bool:
                 try:
-                    result = whatsapp_handler.send_image(to=phone, image_url=image_url, caption=caption)
+                    result = broadcast_whatsapp_handler.send_image(to=phone, image_url=image_url, caption=caption)
                     return result.get("success", False)
                 except Exception as e:
                     logger.error(f"Error sending WhatsApp image to {phone}: {e}")
