@@ -1337,42 +1337,36 @@ Example: "Female therapist, 90min body massage, evening slots"
             logger.info(f"Therapist: {therapist_gender}")
             logger.info(f"Original Date (for reschedule): {original_booking_date}")
 
-            # Determine which date to search for:
-            # - If original_booking_date provided (reschedule): find by phone + ORIGINAL date
-            # - If not provided (new booking): find by phone + NEW date
-            if original_booking_date:
-                search_date = self._normalize_booking_date(original_booking_date)
-                logger.info(f"RESCHEDULE MODE: Searching for phone={customer_phone} + original_date={search_date}")
-            else:
-                search_date = normalized_date
-                logger.info(f"NEW/UPDATE MODE: Searching for phone={customer_phone} + date={search_date}")
-
-            # Check for existing booking to UPDATE
-            all_records = self.bookings_sheet.get_all_values()
+            # Only search for existing booking in RESCHEDULE mode
+            # New bookings always append a new row to prevent overwriting
             existing_row = None
             existing_data = None
 
-            # Normalize customer phone for comparison (extract digits, handle country code)
-            customer_phone_digits = ''.join(filter(str.isdigit, customer_phone))
-            # Remove leading '60' country code if present for flexible matching
-            customer_phone_normalized = customer_phone_digits[-10:] if len(customer_phone_digits) >= 10 else customer_phone_digits
+            if original_booking_date:
+                search_date = self._normalize_booking_date(original_booking_date)
+                logger.info(f"RESCHEDULE MODE: Searching for phone={customer_phone} + original_date={search_date}")
 
-            for i, row in enumerate(all_records[1:], start=2):  # Skip header
-                if len(row) >= 4:
-                    row_phone = row[2].strip() if row[2] else ''
-                    row_date = row[3].strip() if row[3] else ''
-                    row_date_normalized = self._normalize_booking_date(row_date)
+                # Normalize customer phone for comparison (extract digits, handle country code)
+                customer_phone_digits = ''.join(filter(str.isdigit, customer_phone))
+                customer_phone_normalized = customer_phone_digits[-10:] if len(customer_phone_digits) >= 10 else customer_phone_digits
 
-                    # Normalize row phone for comparison
-                    row_phone_digits = ''.join(filter(str.isdigit, row_phone))
-                    row_phone_normalized = row_phone_digits[-10:] if len(row_phone_digits) >= 10 else row_phone_digits
+                all_records = self.bookings_sheet.get_all_values()
+                for i, row in enumerate(all_records[1:], start=2):  # Skip header
+                    if len(row) >= 4:
+                        row_phone = row[2].strip() if row[2] else ''
+                        row_date = row[3].strip() if row[3] else ''
+                        row_date_normalized = self._normalize_booking_date(row_date)
 
-                    # Compare normalized phones (handles 60120000000 vs 60120000000)
-                    if row_phone_normalized == customer_phone_normalized and row_date_normalized == search_date:
-                        existing_row = i
-                        existing_data = row
-                        logger.info(f"Found existing booking at row {i} (phone={row_phone}, date={row_date}) - will UPDATE")
-                        break
+                        row_phone_digits = ''.join(filter(str.isdigit, row_phone))
+                        row_phone_normalized = row_phone_digits[-10:] if len(row_phone_digits) >= 10 else row_phone_digits
+
+                        if row_phone_normalized == customer_phone_normalized and row_date_normalized == search_date:
+                            existing_row = i
+                            existing_data = row
+                            logger.info(f"Found existing booking at row {i} (phone={row_phone}, date={row_date}) - will UPDATE")
+                            break
+            else:
+                logger.info(f"NEW BOOKING MODE: Will append new row (phone={customer_phone}, date={normalized_date})")
 
             if existing_row:
                 # UPDATE existing booking (preserve fields if new value is empty/Unknown)

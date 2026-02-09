@@ -43,7 +43,6 @@ GENDER_FIELDS = {"customer_gender", "therapist_gender"}
 
 def _get_db_config() -> dict:
     """Get MySQL configuration from environment or config file."""
-    # Try environment variables first
     config = {
         'host': os.getenv('MYSQL_HOST', 'localhost'),
         'port': int(os.getenv('MYSQL_PORT', 3306)),
@@ -248,13 +247,11 @@ def get_session(session_id: str) -> dict:
 
         row = cursor.fetchone()
         if row:
-            # Convert to expected format
             session = {field: row.get(field) for field in REQUIRED_FIELDS}
             session['_pain_point_asked'] = bool(row.get('_pain_point_asked'))
             session['_personal_info_asked'] = bool(row.get('_personal_info_asked'))
             return session
 
-        # No session found - return empty
         return {field: None for field in REQUIRED_FIELDS}
 
     except Exception as e:
@@ -311,7 +308,6 @@ def get_session_with_expiry_check(session_id: str) -> Tuple[dict, bool, float]:
         hours = float(row.get('hours_since_update', 0))
         needs_confirmation = hours > 24
 
-        # Convert to expected format
         session = {field: row.get(field) for field in REQUIRED_FIELDS}
         session['_pain_point_asked'] = bool(row.get('_pain_point_asked'))
         session['_personal_info_asked'] = bool(row.get('_personal_info_asked'))
@@ -383,7 +379,6 @@ def merge_session(session_id: str, extracted: dict) -> dict:
             if changed:
                 logger.info("BOOKING SESSION MERGED | %s | updated: %s", session_id, changed)
 
-        # Return updated session
         return get_session(session_id)
 
     except Exception as e:
@@ -572,7 +567,6 @@ def reset_session_for_new_booking(session_id: str) -> None:
         conn = _get_connection()
         cursor = conn.cursor(dictionary=True)
 
-        # Get current session for archiving
         cursor.execute("""
             SELECT * FROM booking_sessions WHERE session_id = %s
         """, (session_id,))
