@@ -217,14 +217,11 @@
     "host": "localhost",
     "port": 3306,
     "user": "reflexology_app",
-    "password": "",
-    "database": "reflexology_booking",
-    "description": "MySQL for booking session persistence. Set password via MYSQL_PASSWORD env var or here."
+    "password": "SERENITY2024Booking!",
+    "database": "reflexology_booking"
   },
   "booking_session": {
     "use_sql": true,
-    "session_expiry_hours": 24,
-    "expiry_confirmation_threshold_hours": 24,
-    "description": "When use_sql=true, booking sessions are stored in MySQL instead of Redis. Sessions > 24h old will ask user to confirm continuation."
+    "session_expiry_hours": 24
   }
 }

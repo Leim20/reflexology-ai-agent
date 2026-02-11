@@ -660,3 +660,67 @@ def log_field_validation(session_id: str, field_name: str, extracted_value: str,
     finally:
         if conn:
             conn.close()
+
+
+# ============================================================================
+# CONFIRMATION LOOP DETECTION
+# ============================================================================
+
+def get_confirmation_attempts(session_id: str) -> int:
+    """Get number of confirmation attempts for this session."""
+    conn = None
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT confirmation_attempts FROM booking_sessions
+            WHERE session_id = %s
+        """, (session_id,))
+        row = cursor.fetchone()
+        return row[0] if row else 0
+    except Exception as e:
+        logger.error(f"get_confirmation_attempts error: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def increment_confirmation_attempts(session_id: str) -> int:
+    """Increment and return confirmation attempts."""
+    conn = None
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE booking_sessions
+            SET confirmation_attempts = confirmation_attempts + 1
+            WHERE session_id = %s
+        """, (session_id,))
+        conn.commit()
+        return get_confirmation_attempts(session_id)
+    except Exception as e:
+        logger.error(f"increment_confirmation_attempts error: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def reset_confirmation_attempts(session_id: str) -> None:
+    """Reset confirmation counter (call after successful booking)."""
+    conn = None
+    try:
+        conn = _get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            UPDATE booking_sessions
+            SET confirmation_attempts = 0
+            WHERE session_id = %s
+        """, (session_id,))
+        conn.commit()
+    except Exception as e:
+        logger.error(f"reset_confirmation_attempts error: {e}")
+    finally:
+        if conn:
+            conn.close()

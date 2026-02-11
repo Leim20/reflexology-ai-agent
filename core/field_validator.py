@@ -314,6 +314,9 @@ def validate_booking_extraction(
     """
     Main entry point for validating MCQ extraction results.
 
+    CHANGE: Skip Phase 2 validation for date/time fields entirely.
+    MCQ already constrains output to valid formats, so trust it.
+
     Args:
         function_args: Raw extraction from MCQ function call
         current_message: Current user message only
@@ -325,16 +328,29 @@ def validate_booking_extraction(
     """
     skip_fields = skip_fields or ['message_type']
 
-    # Separate booking fields from metadata
+    # MCQ-trusted fields - skip Phase 2 validation entirely
+    # MCQ already constrains output to valid enum values
+    mcq_trusted_fields = {'date', 'time', 'service', 'therapist_gender', 'customer_gender'}
+
     booking_fields = {}
+    mcq_trusted = {}
+
     for key, value in function_args.items():
-        if key not in skip_fields and value is not None and value != "" and value != "null":
+        if key in skip_fields or value is None or value == "" or value == "null":
+            continue
+
+        if key in mcq_trusted_fields:
+            # Trust MCQ extraction directly - no Phase 2 validation
+            mcq_trusted[key] = value
+            logger.info(f"   MCQ TRUSTED: {key}='{value}' (skipping Phase 2)")
+        else:
+            # Other fields still go through validation
             booking_fields[key] = value
 
-    if not booking_fields:
+    if not booking_fields and not mcq_trusted:
         return {}
 
-    # Quick validation pass (fast heuristics)
+    # Quick validation pass for non-MCQ fields (phone)
     quick_validated = {}
     needs_llm_validation = {}
 
@@ -344,15 +360,11 @@ def validate_booking_extraction(
                 quick_validated[field] = value
             else:
                 needs_llm_validation[field] = value
-        elif field in ('date', 'time'):
-            if quick_validate_date_time(value, current_message):
-                quick_validated[field] = value
-            else:
-                needs_llm_validation[field] = value
         else:
             # All other fields need LLM validation
             needs_llm_validation[field] = value
 
+    logger.info(f"   MCQ trusted: {list(mcq_trusted.keys())}")
     logger.info(f"   Quick validated: {list(quick_validated.keys())}")
     logger.info(f"   Needs LLM validation: {list(needs_llm_validation.keys())}")
 
@@ -365,4 +377,6 @@ def validate_booking_extraction(
         )
         quick_validated.update(llm_validated)
 
-    return quick_validated
+    # Combine MCQ-trusted + validated fields
+    validated = {**mcq_trusted, **quick_validated}
+    return validated

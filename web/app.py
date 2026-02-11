@@ -30,7 +30,7 @@ from handlers.tools.broadcast_manager import BroadcastManager
 from utils import setup_logging, get_logger, check_file_size, allowed_file
 from utils.followup_queue import followup_message_queue
 from utils.batch_manager import followup_batch_manager
-from core.booking_session import (
+from core.booking_session_sql import (
     get_session as get_booking_session,
     merge_session as merge_booking_session,
     missing_fields as booking_missing_fields,
@@ -40,7 +40,13 @@ from core.booking_session import (
     mark_pain_point_asked,
     mark_personal_info_asked,
     normalize_phone,
-    normalize_gender
+    normalize_gender,
+    get_session_with_expiry_check,
+    reset_session_for_new_booking,
+    continue_existing_session,
+    get_confirmation_attempts,
+    increment_confirmation_attempts,
+    reset_confirmation_attempts
 )
 from core.field_validator import validate_booking_extraction
 
@@ -2265,17 +2271,16 @@ def handle_record_booking_function_call(function_args: dict, sender_phone: str =
 def handle_update_booking_fields_function_call(function_args: dict, session_id: str, sender_phone: str, current_user_message: str = "") -> dict:
     """Handle update_booking_fields function call from AI.
 
-    Two-Phase MCQ-based approach:
-    Phase 1 (already done by AI): Extract fields with full conversation context
-    Phase 2 (this function): Validate extracted fields against ONLY current message
-
-    This prevents hallucination from conversation history.
+    MCQ-based approach:
+    1. Check message_type first - only save data if BOOKING_DATA or CONFIRMATION
+    2. For FAQ/OTHER, don't save anything - just return current state
+    3. Validate enum fields are from allowed values
+    4. Merge validated fields into Redis booking session
 
     Args:
         function_args: Fields from AI including message_type classification
         session_id: WhatsApp/web session ID for Redis booking session
         sender_phone: Sender's actual WhatsApp number (for 'this_number' sentinel)
-        current_user_message: The current user message ONLY (for Phase 2 validation)
     """
     logger.info("="*80)
     logger.info("📝 HANDLING UPDATE_BOOKING_FIELDS FUNCTION CALL (MCQ-BASED)")
@@ -2342,7 +2347,7 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
         # ================================================================
         if current_user_message and cleaned:
             logger.info("="*60)
-            logger.info("🔍 PHASE 2: Anti-Hallucination Validation")
+            logger.info("PHASE 2: Anti-Hallucination Validation")
             logger.info(f"   Current message: {current_user_message[:100]}...")
             logger.info(f"   Fields before validation: {cleaned}")
             logger.info("="*60)
@@ -2358,10 +2363,10 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
                 # Log what was rejected
                 rejected = {k: v for k, v in cleaned.items() if k not in validated_fields}
                 if rejected:
-                    logger.warning(f"   🚫 HALLUCINATION REJECTED: {rejected}")
+                    logger.warning(f"   HALLUCINATION REJECTED: {rejected}")
 
                 cleaned = validated_fields
-                logger.info(f"   ✅ Fields after Phase 2 validation: {cleaned}")
+                logger.info(f"   Fields after Phase 2 validation: {cleaned}")
 
             except Exception as e:
                 logger.error(f"   Phase 2 validation error: {e} - proceeding with original fields")
@@ -2375,6 +2380,27 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
 
             if message_type == 'CONFIRMATION':
                 logger.info(f"   CONFIRMATION received - checking if ready to record")
+                
+                # Track CONFIRMATION attempts at complete step to detect loops
+                if next_step['step'] == 'complete':
+                    attempts = increment_confirmation_attempts(session_id)
+                    logger.info(f"   🔄 CONFIRMATION #{attempts} at complete step")
+                    
+                    if attempts >= 2:
+                        logger.warning(f"   🔄 LOOP DETECTED → forcing direct booking record")
+                        return {
+                            'success': True,
+                            'message_type': 'CONFIRMATION',
+                            'updated_fields': [],
+                            'session': session_data,
+                            'next_step': next_step['step'],
+                            'missing_fields': missing,
+                            'ready_to_record': True,
+                            'force_record': True,
+                            'attempts': attempts,
+                            'message': 'Customer confirmed multiple times. Force recording booking.'
+                        }
+                
                 return {
                     'success': True,
                     'message_type': 'CONFIRMATION',
@@ -2406,9 +2432,10 @@ def handle_update_booking_fields_function_call(function_args: dict, session_id: 
         STEP_ALLOWED_FIELDS = {
             "pain_point": {"pain_point"},
             "service": {"pain_point", "service"},
-            "datetime": {"date", "time"},
-            "therapist_gender": {"therapist_gender"},
-            "personal_info": {"customer_name", "customer_gender", "phone"},
+            "datetime": {"pain_point", "service", "date", "time"},
+            "therapist_gender": {"pain_point", "service", "date", "time", "therapist_gender"},
+            "personal_info": {"pain_point", "service", "date", "time", "therapist_gender",
+                              "customer_name", "customer_gender", "phone"},
             "complete": {"pain_point", "service", "date", "time", "therapist_gender",
                          "customer_name", "customer_gender", "phone"},
         }
@@ -3410,6 +3437,37 @@ def whapi_webhook():
         # Create session ID for WhatsApp user
         session_id = f"whatsapp_{sender}"
 
+        # ===================================================================
+        # 24H SESSION RECOVERY - Check for expired booking sessions
+        # ===================================================================
+        session_recovery_hint = ""
+        try:
+            booking_session, needs_confirmation, hours = get_session_with_expiry_check(session_id)
+            
+            # Check if session has any data (not empty)
+            has_booking_data = any(booking_session.get(f) for f in ['service', 'date', 'time', 'customer_name'])
+            
+            if needs_confirmation and has_booking_data:
+                # Session is > 24h old with data, ask user if they want to continue
+                existing_service = booking_session.get('service', '')
+                existing_date = booking_session.get('date', '')
+                
+                session_recovery_hint = f"""
+[SESSION RECOVERY - IMPORTANT]
+This customer has an incomplete booking from {hours:.0f} hours ago:
+- Service: {existing_service or 'Not selected'}
+- Date: {existing_date or 'Not selected'}
+
+FIRST, ask them: "您好！您之前有一个未完成的预约，要继续吗？还是重新开始？"
+(Hello! You have an incomplete booking from before. Do you want to continue or start fresh?)
+
+Wait for their response before proceeding with booking flow.
+"""
+                logger.info(f"📅 Session > 24h old with data, asking user to continue or restart")
+        except Exception as e:
+            logger.warning(f"Session recovery check failed: {e}")
+        # ===================================================================
+
         # Initialize conversation if new
         if not conversation_manager.session_exists(session_id):
             logger.info(f"Initializing WhatsApp conversation for: {sender}")
@@ -3882,7 +3940,7 @@ INSTRUCTIONS:
         # ===================================================================
         # SEQUENTIAL BOOKING FLOW - Guide conversation step by step
         # ===================================================================
-        booking_hint = ""
+        booking_hint = session_recovery_hint  # Start with recovery hint if any
         raw_user_text = user_message if message_type in ['text', 'voice', 'audio', 'ptt'] else ""
         is_returning_customer = customer_memory and customer_memory.get('is_returning', False)
 
@@ -4381,6 +4439,27 @@ Response format:
                         sender_phone=sender_clean,
                         current_user_message=raw_user_text  # Phase 2: Anti-hallucination validation
                     )
+
+                    # Check for force_record flag (confirmation loop detected)
+                    if update_result.get('force_record'):
+                        logger.info("🔒 Force recording booking due to confirmation loop detection")
+                        session_data = update_result.get('session', {})
+                        record_args = {
+                            'customer_name': session_data.get('customer_name') or 'Guest',
+                            'customer_gender': session_data.get('customer_gender') or '',
+                            'customer_phone': session_data.get('phone') or sender_clean,
+                            'booking_date': session_data.get('date'),
+                            'booking_time': session_data.get('time'),
+                            'service': session_data.get('service'),
+                            'therapist_gender': session_data.get('therapist_gender'),
+                        }
+                        booking_result = handle_record_booking_function_call(record_args, sender_clean, session_id)
+                        logger.info(f"Force record result: {booking_result}")
+                        # Reset confirmation attempts after successful booking
+                        if booking_result.get('success'):
+                            reset_confirmation_attempts(session_id)
+                        # Add booking result to function results
+                        update_result['force_record_result'] = booking_result
 
                     function_results.append({
                         "tool_call_id": tool_call['id'],

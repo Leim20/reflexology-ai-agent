@@ -100,6 +100,7 @@ IMAGE_EXTENSIONS = ('.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp')
 MAX_RETRY_ATTEMPTS = 10
 INITIAL_RETRY_DELAY = 2  # seconds
 MAX_RETRY_DELAY = 60  # seconds
+BROADCAST_DELAY_SECONDS = 60  # Delay between each message to avoid spam detection
 
 
 class BroadcastManager:
@@ -617,6 +618,10 @@ class BroadcastManager:
 
                     if success:
                         stats['sent'] += 1
+                        # Delay between sends to avoid spam detection
+                        if BROADCAST_DELAY_SECONDS > 0:
+                            logger.info(f"      ⏳ Waiting {BROADCAST_DELAY_SECONDS}s before next send...")
+                            time.sleep(BROADCAST_DELAY_SECONDS)
                         delivery_status = 'Delivered'
                         logger.info(f"      Sent successfully (retries: {retry_count})")
                     else:
