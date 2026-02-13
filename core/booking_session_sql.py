@@ -235,8 +235,8 @@ def get_session(session_id: str) -> dict:
 
         cursor.execute("""
             SELECT customer_name, customer_gender, service,
-                   DATE_FORMAT(date, '%%Y-%%m-%%d') as date,
-                   TIME_FORMAT(time, '%%H:%%i') as time,
+                   DATE_FORMAT(date, '%Y-%m-%d') as date,
+                   TIME_FORMAT(time, '%H:%i') as time,
                    therapist_gender, phone, pain_point,
                    pain_point_asked as _pain_point_asked,
                    personal_info_asked as _personal_info_asked,
@@ -281,8 +281,8 @@ def get_session_with_expiry_check(session_id: str) -> Tuple[dict, bool, float]:
 
         cursor.execute("""
             SELECT customer_name, customer_gender, service,
-                   DATE_FORMAT(date, '%%Y-%%m-%%d') as date,
-                   TIME_FORMAT(time, '%%H:%%i') as time,
+                   DATE_FORMAT(date, '%Y-%m-%d') as date,
+                   TIME_FORMAT(time, '%H:%i') as time,
                    therapist_gender, phone, pain_point,
                    pain_point_asked as _pain_point_asked,
                    personal_info_asked as _personal_info_asked,
