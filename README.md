@@ -1,367 +1,111 @@
-# 💆‍♀️ Jessica - Reflexology Chat Agent
+# Jessica — AI Booking & Sales Agent for a Reflexology Spa
 
-**An AI-powered reflexology consultant providing expert guidance via WhatsApp and Web**
+A production WhatsApp + web AI agent I built during my AI engineering internship (Oct 2025 – Feb 2026).
+"Jessica" chats with real customers of a reflexology/massage centre in English, Chinese and Malay,
+answers questions from a knowledge base, takes bookings, registers members, sends follow-ups and
+broadcasts, and hands over to a human manager when needed. It ran on a Linux VPS and handled live traffic.
 
-Version: 1.0
-Created: 2025-11-06
-Agent Name: Jessica
-Specialty: Reflexology & Wellness
+> The client is anonymised as **"Serenity Reflexology"**. All API keys, phone numbers, server
+> addresses, spreadsheet IDs and staff names were removed or replaced with placeholders.
+> The git history is a replay of my real version folders (one commit per version, with its original date).
 
----
+## What it does
 
-## 📋 Overview
+| Area | Details |
+|---|---|
+| Channels | WhatsApp (Whapi API webhooks), web chat (Flask), Chatwoot CRM inbox for human agents |
+| LLM | OpenAI GPT-4o-mini with **function calling** (10 tools), Whisper for voice notes, vision for images |
+| Booking | Multi-turn slot filling → Redis/MySQL booking session → validation → record to Google Sheets |
+| Anti-hallucination | Two-phase field validator: extracted fields must be grounded in what the customer actually said |
+| Multilingual dates | Parses "明天晚上8点", "礼拜六", "esok petang", "next Fri 3pm" into real datetimes |
+| CRM / data | Google Sheets as lightweight CRM: leads, members, bookings, follow-ups, cancellations, insights |
+| Automation | APScheduler jobs: booking reminders, campaign follow-ups, staff-scheduled broadcasts |
+| Safety | Rate limiting, anti-spam/abuse blocking, escalation to manager by issue type |
+| Cost | Prompt-caching-aware message ordering, tiered prompts, Sheets read caching (quota 429 fixes) |
 
-Jessica is a friendly and professional reflexology consultant AI agent that helps customers understand reflexology treatments, benefits, techniques, and wellness guidance. Built on a modular chat agent template, Jessica provides accurate FAQ responses based on a comprehensive knowledge base.
+## How the agent works (one message, end to end)
 
-**Key Capabilities:**
-- ✅ Answer reflexology FAQs with accurate, helpful information
-- ✅ Explain treatment benefits, techniques, and what to expect
-- ✅ Provide pricing and booking information
-- ✅ Process customer inquiries via WhatsApp and Web chat
-- ✅ Handle file uploads (documents, images, voice messages)
-- ✅ Multi-language support (English, Bahasa Melayu, Chinese)
-- ✅ Maintain conversation history for personalized responses
+```
+WhatsApp user ──► Whapi webhook ──► web/app.py
+                                      │
+                    anti_spam.py ◄────┤  rate limit / block / whitelist
+                                      │
+          voice.py / image.py ◄───────┤  voice → Whisper text, image → vision description
+                                      │
+        conversation_manager.py ◄─────┤  load session history (+ auto-summary when long)
+                                      │
+          token_optimizer.py ◄────────┤  build messages in cache-friendly order:
+                                      │  [system prompt, knowledge base, memory, history, user msg]
+                                      ▼
+                         core/ai_engine.py  ──►  OpenAI chat.completions (tools=[...])
+                                      │
+                 tool_calls? ─── yes ─┤
+                                      ▼
+   update_booking_fields · validate_booking_datetime · record_booking · register_member
+   check_my_membership · lookup_my_bookings · send_menu_image · track_conversation_info
+   log_cancellation_reason · escalate_to_human
+                                      │  results appended as tool messages → model called again
+                                      ▼
+            field_validator.py ──► reject values the user never said (anti-hallucination)
+                                      ▼
+            reply ──► WhatsApp / web  +  mirror to Chatwoot  +  lead_manager → Google Sheets
+```
 
----
+Key ideas I learned by building and debugging this:
 
-## 🎯 What Jessica Does
+- **Function calling is a loop, not a single call.** The model proposes tool calls, my code executes them,
+  appends the results, and calls the model again until it produces a final answer.
+- **Never trust extracted fields blindly.** The model sometimes "fills in" a date or pax the user never gave.
+  `core/field_validator.py` re-checks every extracted field against the conversation (two-phase validation).
+- **State belongs outside the prompt.** Booking progress lives in Redis, later MySQL (`core/booking_session_sql.py`),
+  so the agent survives restarts and long conversations, and prompts stay short.
+- **Token cost is an architecture problem.** Static content (system prompt + knowledge base) goes first so OpenAI
+  prompt caching hits; history is summarised; prompts were restructured into tiers (see commits around 23–25 Dec).
+- **External APIs have quotas.** Early versions read Google Sheets cell-by-cell and hit HTTP 429; fixed with batching,
+  caching and a rate limiter (`utils/batch_manager.py`, `utils/cache_manager.py`, `utils/rate_limiter.py`).
 
-### **Reflexology Guidance**
-- Explains what reflexology is and how it works
-- Describes different treatment types (foot, hand, full body)
-- Answers common questions about reflexology
-- Provides information about treatment benefits
-- Explains reflexology techniques and principles
+Detailed write-ups for each subsystem are in [`docs/`](docs/) — e.g.
+[AI engine](docs/06_ai_engine.md), [function calling](docs/14_function_calling_overview.md),
+[booking workflow](docs/13_booking_workflow.md), [field validator](docs/21_field_validator.md),
+[token optimizer](docs/23_token_optimizer.md), [bugs & lessons learned](docs/BUGS_API_QUOTA_TOKEN_WASTE_INCOMPLETE_FUNCTION.md).
 
-### **Treatment Information**
-- Details about session duration and what to expect
-- Treatment pricing and package options
-- Booking information and appointment scheduling
-- Location, hours, and contact details
-- Preparation tips for first-time clients
+## Project structure
 
-### **Professional Boundaries**
-- Emphasizes reflexology as complementary therapy
-- Refers customers to healthcare professionals for medical concerns
-- Does not make medical diagnoses or health guarantees
-- Provides accurate information from knowledge base only
+```
+core/       ai_engine, conversation_manager, booking_session(_sql), booking_extractor,
+            date_extractor, field_validator, anti_spam, config_loader
+handlers/   whatsapp_handler, web_handler, chatwoot_handler
+handlers/tools/  lead_manager, follow_up_manager, broadcast_manager, escalation, voice, image, video, document
+utils/      token_optimizer, cache_manager, rate_limiter, batch_manager, redis_client, logger
+config/     config.json, system prompts (web / whatsapp), .env.template
+data/       knowledge_base/catalog.txt (services, prices, policies)
+scripts/    Google Sheets setup, MySQL schema, VPS monitoring, tests
+web/        Flask app, webhook endpoints, web chat UI
+docs/       technical documentation + docs/dev-notes (my working notes during development)
+```
 
----
+## Development timeline (from the commit history)
 
-## 🚀 Quick Start
+| Period | Milestone |
+|---|---|
+| Nov 2025 | Built from my own `chat-agent-template` repo; WhatsApp + web, function calling, escalation, anti-spam, broadcast, follow-ups |
+| Early Dec | Deployed to VPS (gunicorn + systemd); fixed Google Sheets 429 quota errors |
+| Mid–late Dec | Chatwoot CRM integration, video/voice tools, multilingual & sales-framework prompt rewrite, token optimisation |
+| Jan 2026 | Voice notes, datetime parser, cancellation/retention flow, Redis booking sessions + LLM booking extractor |
+| Feb 2026 | Booking sessions migrated to MySQL, two-phase anti-hallucination validator, broadcast split, multilingual date extractor, documentation |
 
-### **Running Jessica Locally**
+## Running locally
 
 ```bash
-# 1. Navigate to the project folder
-cd reflexology-agent
-
-# 2. Install dependencies (if not already installed)
+python -m venv venv && source venv/bin/activate   # Windows: venv\Scripts\activate
 pip install -r requirements.txt
-
-# 3. Verify environment variables in .env file
-cat .env
-
-# 4. Update knowledge base with your reflexology content
-nano data/knowledge_base/catalog.txt
-
-# 5. Run the agent
-python web/app.py
+cp config/.env.template .env                       # fill in OPENAI_API_KEY, WHAPI_API_TOKEN, ...
+python web/app.py                                  # web chat on http://localhost:5001
 ```
 
-### **Access Points**
-- **Web Chat:** http://localhost:5001
-- **Health Check:** http://localhost:5001/health
-- **WhatsApp:** Configure webhook at http://your-vps-ip:5001/webhook/whapi
+Google Sheets features need a service-account JSON in `config/` and the sheet setup scripts in `scripts/`.
 
----
+## Tech stack
 
-## 📁 Project Structure
-
-```
-reflexology-agent/
-├── config/
-│   ├── config.json          # Jessica's configuration (name, role, port)
-│   ├── prompts.yaml         # Reflexology-specific system prompts
-│   └── .env.template        # Environment variables template
-│
-├── core/                    # Core functionality
-│   ├── ai_engine.py        # OpenAI integration
-│   ├── conversation_manager.py
-│   └── validator.py
-│
-├── handlers/               # Request handlers
-│   ├── whatsapp_handler.py
-│   ├── web_handler.py
-│   └── tools/             # File processing (images, docs, voice)
-│
-├── data/
-│   └── knowledge_base/
-│       └── catalog.txt    # ⚠️ FILL WITH YOUR REFLEXOLOGY CONTENT
-│
-├── web/
-│   └── app.py            # Flask application (runs on port 5001)
-│
-└── logs/                 # Application logs (auto-created)
-```
-
----
-
-## ⚙️ Configuration
-
-### **Agent Settings** (config/config.json)
-```json
-{
-  "agent": {
-    "name": "Jessica",
-    "role": "reflexology consultant",
-    "description": "Friendly reflexology consultant providing expert guidance..."
-  },
-  "platforms": {
-    "web": {
-      "port": 5001  // Different from template (5000)
-    }
-  }
-}
-```
-
-### **Environment Variables** (.env)
-```bash
-OPENAI_API_KEY=sk-proj-...          # Same as template
-WHAPI_API_TOKEN=Ro10XvLAumv5m9...   # Same as template
-WHAPI_CHANNEL_ID=60120000000        # Same as template
-WEBHOOK_URL=https://your-domain.com  # Updated port
-```
-
----
-
-## 📚 Knowledge Base Setup
-
-### **⚠️ IMPORTANT: Fill In Your Reflexology Content**
-
-The knowledge base template is located at:
-```
-data/knowledge_base/catalog.txt
-```
-
-**Sections to complete:**
-1. **[TREATMENTS]** - Your reflexology treatment offerings
-2. **[BENEFITS]** - Health and wellness benefits
-3. **[PRICING]** - Treatment prices and packages
-4. **[FAQ]** - Frequently asked questions
-5. **[BOOKING_INFO]** - Location, hours, contact, booking policy
-6. **[TECHNIQUES]** - Reflexology techniques and methods
-7. **[HEALTH_CONDITIONS]** - Conditions reflexology may help with
-
-**Example Format:**
-```
-[TREATMENTS]
-Name: Foot Reflexology Treatment
-Duration: 60 minutes
-Benefits: Stress relief, improved circulation
-Price: RM 88
-Description: Comprehensive foot reflexology session...
-```
-
----
-
-## 🔌 Platform Integration
-
-### **Web Chat**
-- Automatically enabled
-- Access at: http://localhost:5001 (local) or http://your-ip:5001 (VPS)
-- Clean, mobile-friendly interface
-
-### **WhatsApp (via Whapi)**
-1. Webhook already configured in .env file
-2. Set webhook in Whapi dashboard: `https://your-domain.com`
-3. Customers can message via WhatsApp
-4. Jessica responds with reflexology guidance
-
----
-
-## 🧪 Testing
-
-```bash
-# Test API connections
-python scripts/test_connection.py
-
-# Check health endpoint
-curl http://localhost:5001/health
-
-# View logs
-tail -f logs/ChatAgent_*.log
-
-# View error logs only
-tail -f logs/ChatAgent_errors_*.log
-```
-
----
-
-## 💬 Example Conversations
-
-**Customer:** "What is reflexology?"
-**Jessica:** "Great question! ✨
-
-Reflexology is a complementary therapy that involves applying pressure to specific points on the feet, hands, or ears. These points correspond to different organs and systems in the body...
-
-Would you like to know more about a specific treatment? 😊"
-
-**Customer:** "How much for foot reflexology?"
-**Jessica:** "Here's our pricing for foot reflexology! 👣
-
-Foot Reflexology (60 min): RM 88
-First-time Package: RM 78
-Package of 5 sessions: RM 400
-
-Would you like to book a session? 😊"
-
----
-
-## 📊 Logging
-
-All activity is logged in the `logs/` directory:
-- `ChatAgent_YYYYMMDD.log` - All logs (DEBUG level)
-- `ChatAgent_errors_YYYYMMDD.log` - Errors only
-
-**Log format:**
-```
-2025-11-06 15:30:45 | INFO | core.ai_engine.generate_response:145 | Processing reflexology question...
-```
-
----
-
-## 🚢 Deployment
-
-### **VPS Deployment (DigitalOcean, etc.)**
-
-See `DEPLOYMENT.md` for detailed instructions.
-
-**Quick deployment:**
-```bash
-# 1. Install Gunicorn
-pip install gunicorn
-
-# 2. Run with Gunicorn
-gunicorn --bind 0.0.0.0:5001 --workers 2 web.app:app
-
-# 3. Set up systemd service (see DEPLOYMENT.md)
-```
-
-**Important:** Update Whapi webhook URL to your VPS IP with port 5001
-
----
-
-## 🔧 Customization
-
-### **Update Treatment Information**
-Edit `data/knowledge_base/catalog.txt` with your:
-- Treatment offerings and descriptions
-- Pricing and packages
-- Booking information
-- FAQs specific to your practice
-
-### **Change Agent Personality**
-Edit `config/prompts.yaml` to adjust:
-- Tone and communication style
-- Response formatting
-- Professional boundaries
-- Language preferences
-
-### **Modify Settings**
-Edit `config/config.json` to change:
-- Agent name and role
-- AI model and parameters
-- Port number
-- Feature flags
-
----
-
-## 🐛 Troubleshooting
-
-### **Agent gives incorrect information**
-- Check if knowledge base is loaded: visit `/health` endpoint
-- Review logs: `logs/ChatAgent_*.log`
-- Verify `data/knowledge_base/catalog.txt` has your content
-
-### **Port 5001 already in use**
-- Change port in `config/config.json`
-- Update webhook URL in `.env`
-- Update Whapi webhook settings
-
-### **WhatsApp not responding**
-- Verify webhook URL is publicly accessible
-- Check Whapi dashboard for webhook status
-- Review logs for incoming webhook data
-- Ensure port 5001 is open on your VPS
-
-### **Missing OpenAI responses**
-- Check OpenAI API key in `.env`
-- Review error logs: `logs/ChatAgent_errors_*.log`
-- Verify API quota/billing on OpenAI platform
-
----
-
-## 📝 Next Steps
-
-### **1. Complete Knowledge Base** ⚠️
-Fill in your reflexology content in:
-```
-data/knowledge_base/catalog.txt
-```
-
-### **2. Test Locally**
-```bash
-python web/app.py
-# Visit http://localhost:5001
-```
-
-### **3. Deploy to VPS**
-- Follow `DEPLOYMENT.md` instructions
-- Update Whapi webhook URL
-- Test WhatsApp integration
-
-### **4. Add PDFs (Optional)**
-Place reflexology guides, brochures in:
-```
-data/knowledge_base/documents/
-```
-
----
-
-## ⚠️ Important Reminders
-
-1. **Knowledge Base:** Fill in `data/knowledge_base/catalog.txt` with your content
-2. **Port Number:** This agent uses port **5001** (not 5000)
-3. **Webhook URL:** Update Whapi webhook to use port 5001
-4. **Medical Disclaimer:** Jessica emphasizes reflexology is complementary therapy
-5. **Professional Boundaries:** Jessica refers medical concerns to healthcare professionals
-
----
-
-## 📄 Configuration Summary
-
-| Setting | Value |
-|---------|-------|
-| Agent Name | Jessica |
-| Role | Reflexology Consultant |
-| Port | 5001 |
-| OpenAI Key | ✅ Same as template |
-| WHAPI Token | ✅ Same as template |
-| Webhook URL | https://your-domain.com |
-| Knowledge Base | data/knowledge_base/catalog.txt (⚠️ Update this!) |
-
----
-
-## 🤝 Support
-
-For issues:
-1. Check logs in `logs/` directory
-2. Review `DEPLOYMENT.md` for deployment issues
-3. Verify configuration in `config/` directory
-4. Test connections: `python scripts/test_connection.py`
-
----
-
-**Built with ❤️ using the Chat Agent Template**
-**Specialized for reflexology consultation and wellness guidance**
+Python · Flask · OpenAI API (GPT-4o-mini, Whisper, vision, function calling) · Whapi (WhatsApp) · Chatwoot ·
+Redis · MySQL · Google Sheets (gspread) · APScheduler · gunicorn · Ubuntu VPS
